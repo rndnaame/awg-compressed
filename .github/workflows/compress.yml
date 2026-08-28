@@ -27,14 +27,20 @@ jobs:
           MIRROR="http://repo.hoaxisr.ru"
           OUR_REPO="${{ github.repository }}"
           ROLLING_TAG="compressed"
-          OUT="out"
-          mkdir -p "$OUT" work
+          mkdir -p out/awg out/sb work
 
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-          echo "awg_ver=" >> "$GITHUB_OUTPUT"
-          echo "sb_ver=" >> "$GITHUB_OUTPUT"
-          echo "release_name=Compressed AWG + sing-box" >> "$GITHUB_OUTPUT"
-          echo "version_tag=" >> "$GITHUB_OUTPUT"
+          {
+            echo "skip=true"
+            echo "skip_awg=true"
+            echo "skip_sb=true"
+            echo "awg_ver="
+            echo "sb_ver="
+            echo "awg_tag="
+            echo "sb_tag="
+            echo "awg_name="
+            echo "sb_name="
+            echo "rolling_name=Compressed AWG + sing-box"
+          } >> "$GITHUB_OUTPUT"
 
           upx_fast() {
             f="$1"
@@ -52,7 +58,6 @@ jobs:
             return 0
           }
 
-          echo ""
           echo "== Версии на зеркале =="
           : > /tmp/wanted.txt
           : > /tmp/wanted_src.txt
@@ -68,89 +73,79 @@ jobs:
               continue
             fi
             want="${ipk%.ipk}_compressed.ipk"
-            echo "  IPK: $ipk  =>  $want"
+            echo "  IPK: $ipk => $want"
             echo "$want" >> /tmp/wanted.txt
             echo "ipk|$path|$ipk|$want" >> /tmp/wanted_src.txt
-            # awg-manager_2.17.4_aarch64-... → 2.17.4
             v=$(echo "$ipk" | sed -n 's/^awg-manager_\([^_]*\)_.*/\1/p')
             [ -n "$v" ] && AWG_VER="$v"
           done
 
           SB_VER=$(curl -sL "$MIRROR/singbox/" | grep -oE 'href="1\.[^"/]+/"' | sed 's/href="//;s|/"||' | sort -V | tail -1 || true)
-          echo "  sing-box ver: ${SB_VER:-none}"
+          echo "  sing-box: ${SB_VER:-none}"
           if [ -n "$SB_VER" ]; then
             for f in $(curl -sL "$MIRROR/singbox/$SB_VER/" | grep -oE 'singbox-[^"<> ]+' | grep -v sha256 | grep -E 'aarch64|mips' | sort -u); do
               want="${f}_compressed"
-              echo "  SB:  $f  =>  $want"
+              echo "  SB: $f => $want"
               echo "$want" >> /tmp/wanted.txt
               echo "sb|$SB_VER|$f|$want" >> /tmp/wanted_src.txt
             done
           fi
           sort -u /tmp/wanted.txt -o /tmp/wanted.txt
 
-          echo "  AWG_VER=$AWG_VER  SB_VER=$SB_VER"
-
-          # Имя релиза и тег «топика»
-          # Пример: v2.17.4 (AWG-M UPX) · 1.14.0-rc.1-awgm.15 (sing-box UPX)
-          NAME_PARTS=""
-          TAG_PARTS=""
+          AWG_TAG=""
+          SB_TAG=""
+          AWG_NAME=""
+          SB_NAME=""
           if [ -n "$AWG_VER" ]; then
-            NAME_PARTS="v${AWG_VER} (AWG-M UPX)"
-            TAG_PARTS="awgm-${AWG_VER}"
+            AWG_NAME="v${AWG_VER} (AWG-M UPX)"
+            AWG_TAG=$(echo "awgm-${AWG_VER}" | sed 's/[^a-zA-Z0-9._-]/-/g')
           fi
           if [ -n "$SB_VER" ]; then
-            if [ -n "$NAME_PARTS" ]; then
-              NAME_PARTS="${NAME_PARTS} · ${SB_VER} (sing-box UPX)"
-              TAG_PARTS="${TAG_PARTS}_sb-${SB_VER}"
+            SB_NAME="${SB_VER} (sing-box UPX)"
+            SB_TAG=$(echo "sb-${SB_VER}" | sed 's/[^a-zA-Z0-9._-]/-/g')
+          fi
+          ROLLING_NAME=""
+          [ -n "$AWG_NAME" ] && ROLLING_NAME="$AWG_NAME"
+          if [ -n "$SB_NAME" ]; then
+            if [ -n "$ROLLING_NAME" ]; then
+              ROLLING_NAME="${ROLLING_NAME} · ${SB_NAME}"
             else
-              NAME_PARTS="${SB_VER} (sing-box UPX)"
-              TAG_PARTS="sb-${SB_VER}"
+              ROLLING_NAME="$SB_NAME"
             fi
           fi
-          [ -z "$NAME_PARTS" ] && NAME_PARTS="Compressed AWG + sing-box"
-          # git tag: только безопасные символы
-          VERSION_TAG=$(echo "$TAG_PARTS" | sed 's/[^a-zA-Z0-9._-]/-/g' | sed 's/--*/-/g')
-          [ -z "$VERSION_TAG" ] && VERSION_TAG="build-$(date +%Y%m%d%H%M)"
+          [ -z "$ROLLING_NAME" ] && ROLLING_NAME="Compressed AWG + sing-box"
 
           echo "awg_ver=$AWG_VER" >> "$GITHUB_OUTPUT"
           echo "sb_ver=$SB_VER" >> "$GITHUB_OUTPUT"
-          echo "release_name=$NAME_PARTS" >> "$GITHUB_OUTPUT"
-          echo "version_tag=$VERSION_TAG" >> "$GITHUB_OUTPUT"
-          echo "  release_name: $NAME_PARTS"
-          echo "  version_tag:  $VERSION_TAG"
+          echo "awg_tag=$AWG_TAG" >> "$GITHUB_OUTPUT"
+          echo "sb_tag=$SB_TAG" >> "$GITHUB_OUTPUT"
+          echo "awg_name=$AWG_NAME" >> "$GITHUB_OUTPUT"
+          echo "sb_name=$SB_NAME" >> "$GITHUB_OUTPUT"
+          echo "rolling_name=$ROLLING_NAME" >> "$GITHUB_OUTPUT"
+          echo "  AWG: $AWG_NAME / $AWG_TAG"
+          echo "  SB:  $SB_NAME / $SB_TAG"
 
           echo ""
-          echo "== Ассеты в rolling-теге ${ROLLING_TAG} =="
+          echo "== Ассеты rolling $ROLLING_TAG =="
           : > /tmp/existing.txt
-
-          API_URL="https://api.github.com/repos/${OUR_REPO}/releases/tags/${ROLLING_TAG}"
           API_JSON=$(curl -sL \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$API_URL" || true)
-
+            "https://api.github.com/repos/${OUR_REPO}/releases/tags/${ROLLING_TAG}" || true)
           if echo "$API_JSON" | jq -e '.assets' >/dev/null 2>&1; then
             echo "$API_JSON" | jq -r '.assets[].name' >> /tmp/existing.txt
-            echo "  source: GitHub API"
           else
             HTML=$(curl -sL "https://github.com/${OUR_REPO}/releases/expanded_assets/${ROLLING_TAG}" || true)
             echo "$HTML" | grep -oE 'releases/download/[^"]+' | sed 's|.*/||' >> /tmp/existing.txt || true
-            echo "  source: expanded_assets HTML"
           fi
           grep -v '^$' /tmp/existing.txt | sort -u > /tmp/existing.sorted
           mv /tmp/existing.sorted /tmp/existing.txt
+          sed 's/^/  • /' /tmp/existing.txt 2>/dev/null || echo "  (пусто)"
 
-          if [ -s /tmp/existing.txt ]; then
-            while read -r n; do echo "  • $n"; done < /tmp/existing.txt
-          else
-            echo "  (пусто)"
-          fi
-
-          echo ""
-          echo "== Сравнение =="
           : > /tmp/todo.txt
           NEED=0
+          NEED_AWG=0
+          NEED_SB=0
           while read -r want; do
             [ -n "$want" ] || continue
             if grep -qxF "$want" /tmp/existing.txt; then
@@ -159,17 +154,65 @@ jobs:
               echo "  BUILD: $want"
               echo "$want" >> /tmp/todo.txt
               NEED=1
+              case "$want" in
+                awg-manager_*) NEED_AWG=1 ;;
+                singbox-*) NEED_SB=1 ;;
+              esac
             fi
           done < /tmp/wanted.txt
 
-          if [ "$NEED" -eq 0 ]; then
+          cp /tmp/wanted.txt wanted.txt
+
+          # body-файлы
+          {
+            echo "### awg-manager UPX \`${AWG_VER:-?}\`"
             echo ""
-            echo ">>> Всё уже в релизе ${ROLLING_TAG} — сжатие не нужно."
+            echo "Официальный IPK, бинарники сжаты UPX."
+            echo "Источник: repo.hoaxisr.ru / hoaxisr/awg-manager"
+            echo ""
+            echo "Установка: \`curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh\` → пункт [1]"
+            echo ""
+            echo "Актуальный набор также в теге \`${ROLLING_TAG}\`."
+          } > release-body-awg.md
+
+          {
+            echo "### sing-box UPX \`${SB_VER:-?}\`"
+            echo ""
+            echo "Бинарники Entware (aarch64 / mips / mipsel), сжаты UPX."
+            echo "Источник: repo.hoaxisr.ru/singbox / hoaxisr/amnezia-box"
+            echo ""
+            echo "Установка: \`curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh\` → пункт [2]"
+            echo ""
+            echo "Актуальный набор также в теге \`${ROLLING_TAG}\`."
+          } > release-body-sb.md
+
+          {
+            echo "### Latest UPX builds"
+            echo ""
+            [ -n "$AWG_VER" ] && echo "- **awg-manager:** v${AWG_VER}"
+            [ -n "$SB_VER" ] && echo "- **sing-box:** ${SB_VER}"
+            echo ""
+            echo "Источники: repo.hoaxisr.ru"
+            echo ""
+            echo '```sh'
+            echo "curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
+            echo '```'
+            echo ""
+            echo "Отдельные топики:"
+            [ -n "$AWG_TAG" ] && echo "- AWG-M: \`${AWG_TAG}\`"
+            [ -n "$SB_TAG" ] && echo "- sing-box: \`${SB_TAG}\`"
+          } > release-body-rolling.md
+
+          if [ "$NEED" -eq 0 ]; then
+            echo ">>> Всё актуально — только prune при необходимости"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "skip=false" >> "$GITHUB_OUTPUT"
+          [ "$NEED_AWG" -eq 1 ] && echo "skip_awg=false" >> "$GITHUB_OUTPUT"
+          [ "$NEED_SB" -eq 1 ] && echo "skip_sb=false" >> "$GITHUB_OUTPUT"
+
           echo ""
           echo "== Сборка =="
           while IFS='|' read -r kind a b want; do
@@ -196,54 +239,80 @@ jobs:
                 tar -czf control.tar.gz -C control .
                 tar -czf data.tar.gz -C data .
                 echo "2.0" > debian-binary
-                tar -czf "../../$OUT/$want" debian-binary control.tar.gz data.tar.gz
+                tar -czf "../../out/awg/$want" debian-binary control.tar.gz data.tar.gz
               )
-              ls -lh "$OUT/$want"
+              cp "out/awg/$want" "out/$want"
+              ls -lh "out/awg/$want"
             elif [ "$kind" = "sb" ]; then
               sb_ver="$a"
               f="$b"
               echo "SB: $f"
               wget -q -O "work/$f" "$MIRROR/singbox/$sb_ver/$f"
-              cp "work/$f" "$OUT/$want"
-              chmod +x "$OUT/$want"
-              upx_fast "$OUT/$want"
-              ls -lh "$OUT/$want"
+              cp "work/$f" "out/sb/$want"
+              chmod +x "out/sb/$want"
+              upx_fast "out/sb/$want"
+              cp "out/sb/$want" "out/$want"
+              ls -lh "out/sb/$want"
             fi
           done < /tmp/wanted_src.txt
 
-          ls -lh "$OUT" || true
-          if ! ls "$OUT"/* >/dev/null 2>&1; then
+          echo "== out =="
+          ls -lh out/awg out/sb out 2>/dev/null || true
+          if ! ls out/awg/* out/sb/* >/dev/null 2>&1; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "skip_awg=true" >> "$GITHUB_OUTPUT"
+            echo "skip_sb=true" >> "$GITHUB_OUTPUT"
           fi
 
-          # body для релиза
-          {
-            echo "### UPX-сборки"
-            echo ""
-            [ -n "$AWG_VER" ] && echo "- **awg-manager:** \`v${AWG_VER}\` (UPX)"
-            [ -n "$SB_VER" ] && echo "- **sing-box:** \`${SB_VER}\` (UPX)"
-            echo ""
-            echo "Источники: repo.hoaxisr.ru / hoaxisr/amnezia-box"
-            echo ""
-            echo "### Установка"
-            echo ""
-            echo '```sh'
-            echo "curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
-            echo '```'
-            echo ""
-            echo "Rolling-тег для установщика: \`${ROLLING_TAG}\` (всегда актуальные файлы)."
-            echo "Этот релиз-топик: \`${VERSION_TAG}\`."
-          } > /tmp/release-body.md
-          cp /tmp/release-body.md release-body.md
+      - name: Prune old assets from compressed
+        if: always() && steps.build.outcome == 'success'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          OUR_REPO="${{ github.repository }}"
+          TAG="compressed"
+          [ -f wanted.txt ] || { echo "no wanted.txt"; exit 0; }
+          JSON=$(curl -sL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OUR_REPO}/releases/tags/${TAG}")
+          echo "$JSON" | jq -e '.id' >/dev/null 2>&1 || { echo "no release $TAG"; exit 0; }
+          echo "$JSON" | jq -c '.assets[]?' | while read -r row; do
+            name=$(echo "$row" | jq -r '.name')
+            aid=$(echo "$row" | jq -r '.id')
+            case "$name" in
+              awg-manager_*_compressed.ipk|singbox-*_compressed) ;;
+              *) continue ;;
+            esac
+            if grep -qxF "$name" wanted.txt; then
+              echo "keep $name"
+            else
+              echo "DELETE $name"
+              curl -sL -X DELETE -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${OUR_REPO}/releases/assets/${aid}" >/dev/null || true
+            fi
+          done
 
-      - name: Publish versioned release (топик)
-        if: steps.build.outputs.skip != 'true' && steps.build.outputs.version_tag != ''
+      - name: Publish AWG-M release
+        if: steps.build.outputs.skip_awg != 'true' && steps.build.outputs.awg_tag != ''
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.build.outputs.version_tag }}
-          name: ${{ steps.build.outputs.release_name }}
-          body_path: release-body.md
-          files: out/*
+          tag_name: ${{ steps.build.outputs.awg_tag }}
+          name: ${{ steps.build.outputs.awg_name }}
+          body_path: release-body-awg.md
+          files: out/awg/*
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish sing-box release
+        if: steps.build.outputs.skip_sb != 'true' && steps.build.outputs.sb_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.build.outputs.sb_tag }}
+          name: ${{ steps.build.outputs.sb_name }}
+          body_path: release-body-sb.md
+          files: out/sb/*
           make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -253,9 +322,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: compressed
-          name: ${{ steps.build.outputs.release_name }}
-          body_path: release-body.md
-          files: out/*
+          name: ${{ steps.build.outputs.rolling_name }}
+          body_path: release-body-rolling.md
+          files: |
+            out/*.ipk
+            out/singbox-*_compressed
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
