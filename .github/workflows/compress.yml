@@ -11,23 +11,25 @@ permissions:
 jobs:
   compress:
     runs-on: ubuntu-latest
-    # большой mips + UPX может занять время; лимит job по умолчанию 6ч
     timeout-minutes: 90
     steps:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y upx-ucl curl wget
+          sudo apt-get install -y upx-ucl curl wget jq
 
-      - name: Download and compress
+      - name: Check versions and compress if needed
+        id: build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           MIRROR="http://repo.hoaxisr.ru"
+          OUR_REPO="${{ github.repository }}"
+          TAG="compressed"
           OUT="out"
           mkdir -p "$OUT" work
 
-          # Быстрый UPX: без --best (он на 50–60 МБ mips может идти 30–60+ мин)
-          # Сначала -9 --lzma (до 4 мин), иначе fallback -9, иначе оставляем как есть
           upx_fast() {
             f="$1"
             echo "  UPX: $(basename "$f") ($(du -h "$f" | awk '{print $1}')) ..."
@@ -44,57 +46,134 @@ jobs:
             return 0
           }
 
-          echo "== IPK =="
+          echo "== Версии на зеркале =="
+          : > /tmp/wanted.txt
+          : > /tmp/wanted_src.txt
+
+          # IPK → ожидаемые имена *_compressed.ipk
           for pair in "aarch64-k3.10|aarch64-3.10-kn" "mipsel-k3.4|mipsel-3.4-kn" "mips-k3.4|mips-3.4-kn"; do
             path="${pair%%|*}"
             suffix="${pair##*|}"
             ipk=$(curl -sL "$MIRROR/$path/" | grep -oE "awg-manager_[0-9][^\"'<> ]+_${suffix}\\.ipk" | sort -V | tail -1 || true)
             if [ -z "$ipk" ]; then
-              echo "skip $path"
+              echo "  skip mirror $path"
               continue
             fi
-            echo "IPK: $ipk"
-            wget -q -O "work/$ipk" "$MIRROR/$path/$ipk"
-            rm -rf work/repack
-            mkdir -p work/repack/control work/repack/data
-            (
-              cd work/repack
-              tar -xzf "../$ipk"
-              tar -xzf control.tar.gz -C control 2>/dev/null || true
-              tar -xzf data.tar.gz -C data 2>/dev/null || true
-              find data -type f -executable 2>/dev/null | while read -r f; do
-                head2=$(head -c 2 "$f" 2>/dev/null || true)
-                if [ "$head2" = "#!" ]; then
-                  continue
-                fi
-                # IPK-бинари меньше — можно чуть дольше, но без --best
-                timeout 120 upx -9 --lzma "$f" 2>/dev/null || timeout 60 upx -9 "$f" 2>/dev/null || true
-              done
-              tar -czf control.tar.gz -C control .
-              tar -czf data.tar.gz -C data .
-              echo "2.0" > debian-binary
-              tar -czf "../../$OUT/${ipk%.ipk}_compressed.ipk" debian-binary control.tar.gz data.tar.gz
-            )
+            want="${ipk%.ipk}_compressed.ipk"
+            echo "  IPK mirror: $ipk → $want"
+            echo "$want" >> /tmp/wanted.txt
+            echo "ipk|$path|$ipk|$want" >> /tmp/wanted_src.txt
           done
 
-          echo "== sing-box =="
+          # sing-box
           sb_ver=$(curl -sL "$MIRROR/singbox/" | grep -oE 'href="1\.[^"/]+/"' | sed 's/href="//;s|/"||' | sort -V | tail -1 || true)
-          echo "sing-box version: $sb_ver"
+          echo "  sing-box mirror: ${sb_ver:-none}"
           if [ -n "$sb_ver" ]; then
-            # только архитектуры Entware (mips/mipsel/aarch64), без linux-amd64
             for f in $(curl -sL "$MIRROR/singbox/$sb_ver/" | grep -oE 'singbox-[^"<> ]+' | grep -v sha256 | grep -E 'aarch64|mips' | sort -u); do
-              echo "sing-box: $f"
-              wget -q -O "work/$f" "$MIRROR/singbox/$sb_ver/$f"
-              cp "work/$f" "$OUT/${f}_compressed"
-              chmod +x "$OUT/${f}_compressed"
-              upx_fast "$OUT/${f}_compressed"
+              want="${f}_compressed"
+              echo "  SB mirror: $f → $want"
+              echo "$want" >> /tmp/wanted.txt
+              echo "sb|$sb_ver|$f|$want" >> /tmp/wanted_src.txt
             done
           fi
 
+          sort -u /tmp/wanted.txt -o /tmp/wanted.txt
+          echo ""
+          echo "== Уже в релизе $OUR_REPO @ $TAG =="
+          : > /tmp/existing.txt
+          # API своего репо (с токеном — без rate limit)
+          API_JSON=$(curl -sL -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OUR_REPO}/releases/tags/${TAG}" || true)
+
+          if echo "$API_JSON" | grep -q '"assets"'; then
+            echo "$API_JSON" | jq -r '.assets[].name // empty' 2>/dev/null >> /tmp/existing.txt || \
+            echo "$API_JSON" | grep -oE '"name":\s*"[^"]+"' | sed 's/.*"\([^"]*\)"/\1/' >> /tmp/existing.txt
+          else
+            echo "  (релиза ещё нет или пустой ответ API)"
+          fi
+          sort -u /tmp/existing.txt -o /tmp/existing.txt
+          if [ -s /tmp/existing.txt ]; then
+            sed 's/^/  /' /tmp/existing.txt
+          else
+            echo "  — пусто"
+          fi
+
+          echo ""
+          echo "== Что нужно собрать =="
+          : > /tmp/todo.txt
+          while read -r want; do
+            [ -n "$want" ] || continue
+            if grep -qxF "$want" /tmp/existing.txt 2>/dev/null; then
+              echo "  ✓ уже есть: $want"
+            else
+              echo "  ✗ нет: $want"
+              echo "$want" >> /tmp/todo.txt
+            fi
+          done < /tmp/wanted.txt
+
+          if [ ! -s /tmp/todo.txt ]; then
+            echo ""
+            echo "Все актуальные версии уже в релизе — сжатие не требуется."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo ""
+          echo "== Сборка недостающего =="
+
+          while IFS='|' read -r kind a b want; do
+            [ -n "$want" ] || continue
+            grep -qxF "$want" /tmp/todo.txt 2>/dev/null || continue
+
+            if [ "$kind" = "ipk" ]; then
+              path="$a"
+              ipk="$b"
+              echo "IPK: $ipk"
+              wget -q -O "work/$ipk" "$MIRROR/$path/$ipk"
+              rm -rf work/repack
+              mkdir -p work/repack/control work/repack/data
+              (
+                cd work/repack
+                tar -xzf "../$ipk"
+                tar -xzf control.tar.gz -C control 2>/dev/null || true
+                tar -xzf data.tar.gz -C data 2>/dev/null || true
+                find data -type f -executable 2>/dev/null | while read -r f; do
+                  head2=$(head -c 2 "$f" 2>/dev/null || true)
+                  if [ "$head2" = "#!" ]; then
+                    continue
+                  fi
+                  timeout 120 upx -9 --lzma "$f" 2>/dev/null || timeout 60 upx -9 "$f" 2>/dev/null || true
+                done
+                tar -czf control.tar.gz -C control .
+                tar -czf data.tar.gz -C data .
+                echo "2.0" > debian-binary
+                tar -czf "../../$OUT/$want" debian-binary control.tar.gz data.tar.gz
+              )
+              echo "  → $OUT/$want"
+            elif [ "$kind" = "sb" ]; then
+              sb_ver="$a"
+              f="$b"
+              echo "sing-box: $f"
+              wget -q -O "work/$f" "$MIRROR/singbox/$sb_ver/$f"
+              cp "work/$f" "$OUT/$want"
+              chmod +x "$OUT/$want"
+              upx_fast "$OUT/$want"
+              echo "  → $OUT/$want"
+            fi
+          done < /tmp/wanted_src.txt
+
+          echo ""
           echo "== result =="
           ls -lh "$OUT"
+          # если вдруг пусто — не публикуем
+          if ! ls "$OUT"/* >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Publish release
+        if: steps.build.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: compressed
@@ -110,7 +189,7 @@ jobs:
             ```
 
             Меню: только awg-manager / только sing-box / оба.
-            Если уже установлено — спросит, переустанавливать ли.
+            Если уже установлено — спросит, обновлять ли.
 
             Без вопросов:
             ```sh
