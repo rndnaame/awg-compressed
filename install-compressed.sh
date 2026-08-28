@@ -470,10 +470,9 @@ if [ -n "$INSTALL_AWG" ] || [ -n "$INSTALL_SB" ]; then
   [ "$DO_AWG" = "1" ] && AWG_MODE="install"
   [ "$DO_SB" = "1" ] && SB_MODE="install"
 else
-  echo "Что сделать?"
-  echo "  [1] Установить awg-manager (UPX-версия)"
-  echo "  [2] Установить sing-box (UPX-версия)"
-  echo "  [3] Установить awg-manager + sing-Box (UPX-версия)"
+  echo "  [1] Установка awg-manager (UPX-версия)"
+  echo "  [2] Установка sing-box (UPX-версия)"
+  echo "  [3] Установка awg-manager + sing-Box (UPX-версия)"
   echo "  [4] Установка awg-manager (с выбором версии)"
   echo "  [5] Настроить доступ через туннель"
   echo "  [0] Отмена"
