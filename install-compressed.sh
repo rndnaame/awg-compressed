@@ -368,14 +368,19 @@ fi
 
 echo "Сейчас на роутере:"
 if [ -n "$CUR_AWG" ]; then
-  echo "   awg-manager : $CUR_AWG"
+  echo "   AWG-Manager : $CUR_AWG"
 else
-  echo "   awg-manager : не установлен"
+  echo "   AWG-Manager : не установлен"
 fi
-if [ -n "$CUR_SB_RAW" ]; then
-  echo "   sing-box    : $CUR_SB_RAW"
+if [ -n "$CUR_SB_VER" ]; then
+  echo "   Sing-box    : $CUR_SB_VER"
+elif [ -n "$CUR_SB_RAW" ]; then
+  # запасной разбор, если версия не вытащилась regex'ом
+  _sb=$(echo "$CUR_SB_RAW" | sed -n 's/.*[Vv]ersion[[:space:]]*//p' | awk '{print $1}')
+  [ -z "$_sb" ] && _sb="$CUR_SB_RAW"
+  echo "   Sing-box    : $_sb"
 else
-  echo "   sing-box    : не найден"
+  echo "   Sing-box    : не найден"
 fi
 echo ""
 
