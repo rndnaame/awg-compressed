@@ -368,9 +368,9 @@ fi
 
 echo "Сейчас на роутере:"
 if [ -n "$CUR_AWG" ]; then
-  echo "   AWG-Manager : $CUR_AWG"
+  echo "   awg-manager : $CUR_AWG"
 else
-  echo "   AWG-Manager : не установлен"
+  echo "   awg-manager : не установлен"
 fi
 if [ -n "$CUR_SB_VER" ]; then
   echo "   Sing-box    : $CUR_SB_VER"
@@ -378,9 +378,9 @@ elif [ -n "$CUR_SB_RAW" ]; then
   # запасной разбор, если версия не вытащилась regex'ом
   _sb=$(echo "$CUR_SB_RAW" | sed -n 's/.*[Vv]ersion[[:space:]]*//p' | awk '{print $1}')
   [ -z "$_sb" ] && _sb="$CUR_SB_RAW"
-  echo "   Sing-box    : $_sb"
+  echo "   sing-box    : $_sb"
 else
-  echo "   Sing-box    : не найден"
+  echo "   sing-box    : не найден"
 fi
 echo ""
 
@@ -437,7 +437,7 @@ if [ -n "$NEW_AWG" ]; then
     [ "$_c" = "1" ] && AWG_HL=1
   fi
 fi
-AWG_LINE="   AWG-Manager : ${NEW_AWG:-—}"
+AWG_LINE="   awg-manager : ${NEW_AWG:-—}"
 [ "$AWG_HL" = "1" ] && AWG_LINE="${AWG_LINE}  ← обновление"
 hl_line "$AWG_HL" "$AWG_LINE"
 
@@ -453,7 +453,7 @@ if [ -n "$NEW_SB" ]; then
     esac
   fi
 fi
-SB_LINE="   Sing-box    : ${NEW_SB:-—}"
+SB_LINE="   sing-box    : ${NEW_SB:-—}"
 [ "$SB_HL" = "1" ] && SB_LINE="${SB_LINE}  ← обновление"
 hl_line "$SB_HL" "$SB_LINE"
 
@@ -473,8 +473,8 @@ else
   echo "Что сделать?"
   echo "  [1] Установить awg-manager (UPX-версия)"
   echo "  [2] Установить sing-box (UPX-версия)"
-  echo "  [3] Установить AWG-M + Sing-Box (UPX-версия)"
-  echo "  [4] Установка AWG-M (с выбором версии)"
+  echo "  [3] Установить awg-manager + sing-Box (UPX-версия)"
+  echo "  [4] Установка awg-manager (с выбором версии)"
   echo "  [5] Настроить доступ через туннель"
   echo "  [0] Отмена"
   echo ""
