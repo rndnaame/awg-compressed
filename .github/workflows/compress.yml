@@ -11,6 +11,8 @@ permissions:
 jobs:
   compress:
     runs-on: ubuntu-latest
+    # большой mips + UPX может занять время; лимит job по умолчанию 6ч
+    timeout-minutes: 90
     steps:
       - name: Install tools
         run: |
@@ -23,6 +25,24 @@ jobs:
           MIRROR="http://repo.hoaxisr.ru"
           OUT="out"
           mkdir -p "$OUT" work
+
+          # Быстрый UPX: без --best (он на 50–60 МБ mips может идти 30–60+ мин)
+          # Сначала -9 --lzma (до 4 мин), иначе fallback -9, иначе оставляем как есть
+          upx_fast() {
+            f="$1"
+            echo "  UPX: $(basename "$f") ($(du -h "$f" | awk '{print $1}')) ..."
+            if timeout 240 upx -9 --lzma --force "$f" 2>&1; then
+              echo "  OK lzma: $(du -h "$f" | awk '{print $1}')"
+              return 0
+            fi
+            echo "  lzma timeout/fail → пробуем -9"
+            if timeout 120 upx -9 --force "$f" 2>&1; then
+              echo "  OK -9: $(du -h "$f" | awk '{print $1}')"
+              return 0
+            fi
+            echo "  UPX не успел — оставляем без сжатия"
+            return 0
+          }
 
           echo "== IPK =="
           for pair in "aarch64-k3.10|aarch64-3.10-kn" "mipsel-k3.4|mipsel-3.4-kn" "mips-k3.4|mips-3.4-kn"; do
@@ -47,7 +67,8 @@ jobs:
                 if [ "$head2" = "#!" ]; then
                   continue
                 fi
-                upx --lzma --best "$f" 2>/dev/null || true
+                # IPK-бинари меньше — можно чуть дольше, но без --best
+                timeout 120 upx -9 --lzma "$f" 2>/dev/null || timeout 60 upx -9 "$f" 2>/dev/null || true
               done
               tar -czf control.tar.gz -C control .
               tar -czf data.tar.gz -C data .
@@ -60,12 +81,13 @@ jobs:
           sb_ver=$(curl -sL "$MIRROR/singbox/" | grep -oE 'href="1\.[^"/]+/"' | sed 's/href="//;s|/"||' | sort -V | tail -1 || true)
           echo "sing-box version: $sb_ver"
           if [ -n "$sb_ver" ]; then
-            for f in $(curl -sL "$MIRROR/singbox/$sb_ver/" | grep -oE 'singbox-[^"<> ]+' | grep -v sha256 | sort -u); do
+            # только архитектуры Entware (mips/mipsel/aarch64), без linux-amd64
+            for f in $(curl -sL "$MIRROR/singbox/$sb_ver/" | grep -oE 'singbox-[^"<> ]+' | grep -v sha256 | grep -E 'aarch64|mips' | sort -u); do
               echo "sing-box: $f"
               wget -q -O "work/$f" "$MIRROR/singbox/$sb_ver/$f"
               cp "work/$f" "$OUT/${f}_compressed"
               chmod +x "$OUT/${f}_compressed"
-              upx --lzma --best --force "$OUT/${f}_compressed" 2>/dev/null || true
+              upx_fast "$OUT/${f}_compressed"
             done
           fi
 
@@ -81,18 +103,20 @@ jobs:
             Auto-built UPX-compressed packages.
             Sources: repo.hoaxisr.ru / hoaxisr/amnezia-box
 
-            ## Установка на роутере (одна команда)
+            ## Установка на роутере
 
             ```sh
             curl -sL https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh | sh
             ```
 
-            Или wget:
-            ```sh
-            wget -qO- https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh | sh
-            ```
+            Меню: только awg-manager / только sing-box / оба.
+            Если уже установлено — спросит, переустанавливать ли.
 
-            Скрипт сам определит архитектуру (aarch64 / mipsel / mips), скачает нужный IPK и sing-box, установит.
+            Без вопросов:
+            ```sh
+            INSTALL_AWG=1 INSTALL_SB=0 sh -c "$(curl -sL https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh)"
+            INSTALL_AWG=0 INSTALL_SB=1 sh -c "$(curl -sL https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh)"
+            ```
           files: out/*
           make_latest: true
         env:
