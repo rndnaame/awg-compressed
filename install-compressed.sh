@@ -281,7 +281,7 @@ else
   echo "  [3] Оба"
   echo "  [0] Отмена"
   echo ""
-  choice=$(ask "Выбор [0-3], по умолчанию 3: " "3")
+  choice=$(ask "Выбор [0-3], по умолчанию 1: " "1")
   case "$choice" in
     1) DO_AWG=1; DO_SB=0 ;;
     2) DO_AWG=0; DO_SB=1 ;;
