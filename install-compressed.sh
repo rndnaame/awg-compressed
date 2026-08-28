@@ -415,9 +415,22 @@ if [ "$DO_SB" = "1" ]; then
     exit 1
   fi
   mkdir -p "$SINGBOX_DIR"
-  # бэкап старого при обновлении
+  # бэкап старого — только по запросу
   if [ -x "$SINGBOX_DIR/sing-box" ] && { [ "$SB_MODE" = "upgrade" ] || [ "$SB_MODE" = "replace" ]; }; then
-    cp "$SINGBOX_DIR/sing-box" "$SINGBOX_DIR/sing-box.bak" 2>/dev/null || true
+    if [ -n "$BACKUP_SB" ]; then
+      # неинтерактивно: BACKUP_SB=1
+      case "$BACKUP_SB" in
+        1|y|Y|yes|YES)
+          cp "$SINGBOX_DIR/sing-box" "$SINGBOX_DIR/sing-box.bak" 2>/dev/null || true
+          echo "   💾 бэкап → $SINGBOX_DIR/sing-box.bak"
+          ;;
+      esac
+    else
+      if [ "$(yes_no "Сохранить старый sing-box как sing-box.bak? [y/N]: " "n")" = "1" ]; then
+        cp "$SINGBOX_DIR/sing-box" "$SINGBOX_DIR/sing-box.bak" 2>/dev/null || true
+        echo "   💾 бэкап → $SINGBOX_DIR/sing-box.bak"
+      fi
+    fi
   fi
   cp "$SB_NAME" "$SINGBOX_DIR/sing-box"
   chmod +x "$SINGBOX_DIR/sing-box"

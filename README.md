@@ -45,7 +45,7 @@ wget -qO- https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install
 | awg-manager | `opkg install` сжатого `.ipk` |
 | sing-box | `/opt/etc/awg-manager/singbox/sing-box` |
 
-(Опционально, при согласии) При обновлении sing-box старый файл сохраняется как `sing-box.bak`.
+При обновлении sing-box скрипт **спросит**, сохранять ли старый файл как `sing-box.bak` (по умолчанию — нет). Принудительно: `BACKUP_SB=1`.
 
 ---
 
