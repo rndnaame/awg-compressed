@@ -160,7 +160,101 @@ fetch_text() {
 }
 
 
-# Пункт меню [4]: настройка доступа AWG Manager через WireGuard-туннель
+# Пункт меню [4]: установка AWG Manager с выбором версии (официальный IPK)
+install_awg_version_select() {
+  echo ""
+  echo "=== Установка AWG Manager (выбор версии) ==="
+  echo ""
+
+  case "$ARCH" in
+    aarch64) S="aarch64-3.10-kn"; R="aarch64-k3.10" ;;
+    mipsel)  S="mipsel-3.4-kn";   R="mipsel-k3.4" ;;
+    mips)    S="mips-3.4-kn";     R="mips-k3.4" ;;
+    *)
+      echo "❌ Неизвестная архитектура: $ARCH"
+      return 1
+      ;;
+  esac
+  echo "✅ Архитектура: $A → $S"
+
+  mkdir -p /opt/etc/opkg
+  echo "src/gz hoaxisr http://repo.hoaxisr.ru/$R" > /opt/etc/opkg/awg_manager.conf
+  echo "✅ Репозиторий: http://repo.hoaxisr.ru/$R"
+
+  echo "→ Список релизов hoaxisr/awg-manager..."
+  API_JSON=$(fetch_text "https://api.github.com/repos/hoaxisr/awg-manager/releases?per_page=15" || true)
+  VERSIONS=$(echo "$API_JSON" | sed -n 's/.*"tag_name": "\([^"]*\)".*/\1/p' | grep -v '^latest$' | head -10)
+
+  if [ -z "$VERSIONS" ]; then
+    echo "   API пуст, пробуем HTML..."
+    HTML=$(fetch_text "https://github.com/hoaxisr/awg-manager/releases" || true)
+    VERSIONS=$(echo "$HTML" | grep -oE '/hoaxisr/awg-manager/releases/tag/v[0-9][^"<> ]+' | sed 's|.*/||' | sort -u | sort -Vr | head -10)
+  fi
+
+  if [ -z "$VERSIONS" ]; then
+    echo "❌ Не удалось получить список версий"
+    return 1
+  fi
+
+  echo ""
+  echo "🔢 Последние версии:"
+  i=1
+  echo "$VERSIONS" > /tmp/awg-ver-list.$$
+  while read -r v; do
+    [ -n "$v" ] || continue
+    echo "   $i) ${v#v}"
+    i=$((i + 1))
+  done < /tmp/awg-ver-list.$$
+  max=$((i - 1))
+
+  c=$(ask "Номер (1-$max) или версия (Enter = последняя): " "")
+  if [ -z "$c" ]; then
+    ver=$(head -1 /tmp/awg-ver-list.$$)
+  elif echo "$c" | grep -qE '^[0-9]+$'; then
+    if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
+      ver=$(sed -n "${c}p" /tmp/awg-ver-list.$$)
+    else
+      echo "❌ Номер вне диапазона 1-$max"
+      rm -f /tmp/awg-ver-list.$$
+      return 1
+    fi
+  else
+    ver="$c"
+  fi
+  rm -f /tmp/awg-ver-list.$$
+  ver=${ver#v}
+
+  ipk_name="awg-manager_${ver}_${S}.ipk"
+  url="https://github.com/hoaxisr/awg-manager/releases/download/v${ver}/${ipk_name}"
+  url_mirror="http://repo.hoaxisr.ru/${R}/${ipk_name}"
+
+  echo ""
+  echo "📥 Скачивание v$ver ($ipk_name)..."
+  cd /tmp || return 1
+  rm -f "$ipk_name"
+
+  if ! download_file "$url" "$ipk_name" 100000; then
+    echo "   GitHub не удалось — пробуем зеркало..."
+    if ! download_file "$url_mirror" "$ipk_name" 100000; then
+      echo "❌ Ошибка скачивания v$ver"
+      return 1
+    fi
+  fi
+
+  echo "📦 Установка $ipk_name ..."
+  if opkg install --force-downgrade "./$ipk_name"; then
+    echo "🎉 Установлен awg-manager v$ver"
+  else
+    echo "⚠️ Ошибка установки"
+    rm -f "./$ipk_name"
+    return 1
+  fi
+  rm -f "./$ipk_name"
+  echo "Обновление позже: opkg update && opkg upgrade awg-manager"
+  return 0
+}
+
+# Пункт меню [5]: настройка доступа AWG Manager через WireGuard-туннель
 # Источник: https://github.com/genaRijoff/awgm_tun_wgX
 TUNNEL_SCRIPT_URL="https://raw.githubusercontent.com/rndnaame/awg-compressed/main/awg-manager-tunnel-access.sh"
 
@@ -324,15 +418,20 @@ else
   echo "  [1] Установить awg-manager (UPX-версия)"
   echo "  [2] Установить sing-box (UPX-версия)"
   echo "  [3] Установить AWG-M + Sing-Box (UPX-версия)"
-  echo "  [4] Настроить доступ через туннель"
+  echo "  [4] Установка AWG-M (с выбором версии)"
+  echo "  [5] Настроить доступ через туннель"
   echo "  [0] Отмена"
   echo ""
-  choice=$(ask "Выбор [0-4], по умолчанию 1: " "1")
+  choice=$(ask "Выбор [0-5], по умолчанию 1: " "1")
   case "$choice" in
     1) DO_AWG=1; DO_SB=0 ;;
     2) DO_AWG=0; DO_SB=1 ;;
     3) DO_AWG=1; DO_SB=1 ;;
     4)
+      install_awg_version_select
+      exit $?
+      ;;
+    5)
       run_tunnel_access
       exit $?
       ;;
