@@ -79,7 +79,7 @@ run_timeout() {
 }
 
 # Скачивание: сначала туннели (nwg/t2s), default — последним
-# DL_IFACES="nwg0 t2s0" — свой порядок
+# DL_IFACES="nwg0 opkgtun10 awgm0" — свой порядок
 download_file() {
   url="$1"
   out="$2"
@@ -89,7 +89,7 @@ download_file() {
 
   rm -f "$out"
   # туннели первыми — GitHub через WAN часто «висит»
-  ifaces="${DL_IFACES:-nwg0 nwg1 t2s0 t2s1 __default__}"
+  ifaces="${DL_IFACES:-nwg0 nwg1 t2s0 t2s1 opkgtun10 awgm0 __default__}"
 
   for iface in $ifaces; do
     if [ "$iface" = "__default__" ]; then
@@ -137,7 +137,7 @@ download_file() {
 fetch_text() {
   url="$1"
   try_secs=20
-  ifaces="nwg0 nwg1 t2s0 t2s1 __default__"
+  ifaces="nwg0 nwg1 t2s0 t2s1 opkgtun10 awgm0 __default__"
   for iface in $ifaces; do
     if [ "$iface" = "__default__" ]; then
       iface_opt=""
@@ -382,7 +382,7 @@ if [ "$DO_AWG" = "1" ]; then
   echo ""
   echo "⬇ Скачиваем $IPK_NAME ..."
   if ! download_file "$IPK_URL" "$IPK_NAME" 100000; then
-    echo "❌ Ошибка скачивания IPK (пробовали nwg0/1, t2s0/1, default)"
+    echo "❌ Ошибка скачивания IPK (пробовали nwg0/1, t2s0/1, opkgtun10, awgm0, default)"
     exit 1
   fi
 
@@ -411,7 +411,7 @@ if [ "$DO_SB" = "1" ]; then
   echo ""
   echo "⬇ Скачиваем $SB_NAME ..."
   if ! download_file "$SB_URL" "$SB_NAME" 100000; then
-    echo "❌ Ошибка скачивания sing-box (пробовали nwg0/1, t2s0/1, default)"
+    echo "❌ Ошибка скачивания sing-box (пробовали nwg0/1, t2s0/1, opkgtun10, awgm0, default)"
     exit 1
   fi
   mkdir -p "$SINGBOX_DIR"
