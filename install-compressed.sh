@@ -207,14 +207,18 @@ install_awg_version_select() {
   done < /tmp/awg-ver-list.$$
   max=$((i - 1))
 
-  c=$(ask "Номер (1-$max) или версия (Enter = последняя): " "")
+  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = выход): " "")
   if [ -z "$c" ]; then
     ver=$(head -1 /tmp/awg-ver-list.$$)
+  elif [ "$c" = "0" ]; then
+    echo "Отменено."
+    rm -f /tmp/awg-ver-list.$$
+    return 0
   elif echo "$c" | grep -qE '^[0-9]+$'; then
     if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
       ver=$(sed -n "${c}p" /tmp/awg-ver-list.$$)
     else
-      echo "❌ Номер вне диапазона 1-$max"
+      echo "❌ Номер вне диапазона 1-$max (0 = выход)"
       rm -f /tmp/awg-ver-list.$$
       return 1
     fi
