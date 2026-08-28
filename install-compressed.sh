@@ -45,13 +45,88 @@ ver_cmp() {
   v1="$1"
   v2="$2"
   [ "$v1" = "$v2" ] && { echo 0; return; }
-  # sort -V: меньшая первая
   first=$(printf '%s\n%s\n' "$v1" "$v2" | sort -V | head -1)
   if [ "$first" = "$v1" ]; then
     echo 2
   else
     echo 1
   fi
+}
+
+# Скачивание с таймаутом и перебором интерфейсов (default → nwg0/1 → t2s0/1)
+# Использование: download_file URL OUTFILE
+#   DL_IFACES="nwg0 t2s0" download_file ...  — свой список
+download_file() {
+  url="$1"
+  out="$2"
+  min_size="${3:-1000}"
+
+  rm -f "$out"
+  ifaces="${DL_IFACES:-__default__ nwg0 nwg1 t2s0 t2s1}"
+
+  for iface in $ifaces; do
+    if [ "$iface" = "__default__" ]; then
+      label="default"
+      iface_opt=""
+    else
+      # интерфейс может отсутствовать — пропускаем быстро
+      if ! ip link show "$iface" >/dev/null 2>&1 && ! ifconfig "$iface" >/dev/null 2>&1; then
+        echo "   ⏭  $iface — нет такого интерфейса"
+        continue
+      fi
+      label="$iface"
+      iface_opt="--interface $iface"
+    fi
+
+    echo "   ↻ через $label ..."
+    # curl с жёсткими таймаутами (не виснет)
+    # shellcheck disable=SC2086
+    if curl -fL --connect-timeout 12 --max-time 180 --retry 1 --retry-delay 1 \
+         $iface_opt -o "$out" "$url" 2>/dev/null; then
+      if [ -s "$out" ] && [ "$(wc -c < "$out")" -ge "$min_size" ]; then
+        echo "   ✓ скачано через $label ($(du -h "$out" | awk '{print $1}'))"
+        return 0
+      fi
+    fi
+    rm -f "$out"
+
+    # запасной wget (если curl не смог; bind по iface у busybox wget часто нет)
+    if [ "$iface" = "__default__" ]; then
+      if command -v wget >/dev/null 2>&1; then
+        if wget -q -T 20 -O "$out" "$url" 2>/dev/null; then
+          if [ -s "$out" ] && [ "$(wc -c < "$out")" -ge "$min_size" ]; then
+            echo "   ✓ скачано через wget ($(du -h "$out" | awk '{print $1}'))"
+            return 0
+          fi
+        fi
+        rm -f "$out"
+      fi
+    fi
+  done
+
+  echo "   ✗ не удалось скачать: $url"
+  return 1
+}
+
+# Лёгкий curl для JSON/HTML (короткий таймаут + iface fallback)
+fetch_text() {
+  url="$1"
+  ifaces="__default__ nwg0 nwg1 t2s0 t2s1"
+  for iface in $ifaces; do
+    if [ "$iface" = "__default__" ]; then
+      iface_opt=""
+    else
+      ip link show "$iface" >/dev/null 2>&1 || ifconfig "$iface" >/dev/null 2>&1 || continue
+      iface_opt="--interface $iface"
+    fi
+    # shellcheck disable=SC2086
+    out=$(curl -fsL --connect-timeout 8 --max-time 25 $iface_opt "$url" 2>/dev/null) || out=""
+    if [ -n "$out" ]; then
+      echo "$out"
+      return 0
+    fi
+  done
+  return 1
 }
 
 echo "=== Установка compressed AWG + sing-box ==="
@@ -115,21 +190,18 @@ echo ""
 
 # --- ассеты ---
 echo "→ Получаем список файлов из релиза..."
-ASSETS=$(curl -sL "https://api.github.com/repos/${REPO}/releases/tags/${TAG}" 2>/dev/null \
-  | grep -oE '"browser_download_url":\s*"[^"]+"' \
-  | sed 's/.*"\([^"]*\)"/\1/' || true)
+API_JSON=$(fetch_text "https://api.github.com/repos/${REPO}/releases/tags/${TAG}" || true)
+ASSETS=$(echo "$API_JSON" | grep -oE '"browser_download_url":\s*"[^"]+"' | sed 's/.*"\([^"]*\)"/\1/' || true)
 
 if [ -z "$ASSETS" ]; then
   echo "   API недоступен, пробуем HTML..."
-  ASSETS=$(curl -sL "https://github.com/${REPO}/releases/expanded_assets/${TAG}" 2>/dev/null \
-    | grep -oE 'href="[^"]*releases/download/[^"]+"' \
-    | sed 's/href="//;s/"$//' \
-    | while read -r p; do
-        case "$p" in
-          http*) echo "$p" ;;
-          /*) echo "https://github.com$p" ;;
-        esac
-      done || true)
+  HTML=$(fetch_text "https://github.com/${REPO}/releases/expanded_assets/${TAG}" || true)
+  ASSETS=$(echo "$HTML" | grep -oE 'href="[^"]*releases/download/[^"]+"' | sed 's/href="//;s/"$//' | while read -r p; do
+    case "$p" in
+      http*) echo "$p" ;;
+      /*) echo "https://github.com$p" ;;
+    esac
+  done || true)
 fi
 
 if [ -z "$ASSETS" ]; then
@@ -279,11 +351,8 @@ rm -f ./* 2>/dev/null || true
 if [ "$DO_AWG" = "1" ]; then
   echo ""
   echo "⬇ Скачиваем $IPK_NAME ..."
-  wget -q --show-progress -O "$IPK_NAME" "$IPK_URL" 2>/dev/null \
-    || wget -q -O "$IPK_NAME" "$IPK_URL" \
-    || curl -sL -o "$IPK_NAME" "$IPK_URL"
-  if [ ! -s "$IPK_NAME" ]; then
-    echo "❌ Ошибка скачивания IPK"
+  if ! download_file "$IPK_URL" "$IPK_NAME" 100000; then
+    echo "❌ Ошибка скачивания IPK (пробовали default, nwg0, nwg1, t2s0, t2s1)"
     exit 1
   fi
 
@@ -311,11 +380,8 @@ fi
 if [ "$DO_SB" = "1" ]; then
   echo ""
   echo "⬇ Скачиваем $SB_NAME ..."
-  wget -q --show-progress -O "$SB_NAME" "$SB_URL" 2>/dev/null \
-    || wget -q -O "$SB_NAME" "$SB_URL" \
-    || curl -sL -o "$SB_NAME" "$SB_URL"
-  if [ ! -s "$SB_NAME" ]; then
-    echo "❌ Ошибка скачивания sing-box"
+  if ! download_file "$SB_URL" "$SB_NAME" 100000; then
+    echo "❌ Ошибка скачивания sing-box (пробовали default, nwg0, nwg1, t2s0, t2s1)"
     exit 1
   fi
   mkdir -p "$SINGBOX_DIR"
