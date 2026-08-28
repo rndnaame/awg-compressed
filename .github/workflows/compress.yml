@@ -1,10 +1,9 @@
-# .github/workflows/compress.yml
 name: Compress AWG + sing-box
 
 on:
   schedule:
-    - cron: '0 */8 * * *'   # каждые 8 часов
-  workflow_dispatch:          # ручной запуск из Actions
+    - cron: "0 */8 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,42 +17,51 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y upx-ucl curl wget
 
-      - name: Download & compress
+      - name: Download and compress
         run: |
           set -e
-          MIRROR=http://repo.hoaxisr.ru
-          OUT=out
+          MIRROR="http://repo.hoaxisr.ru"
+          OUT="out"
           mkdir -p "$OUT" work
 
-          # --- IPK ---
-          for arch in aarch64-k3.10:aarch64-3.10-kn mipsel-k3.4:mipsel-3.4-kn mips-k3.4:mips-3.4-kn; do
-            path=${arch%%:*}
-            suffix=${arch##*:}
-            ipk=$(curl -sL "$MIRROR/$path/" | grep -oE "awg-manager_[0-9][^\"'<> ]+_${suffix}\\.ipk" | sort -V | tail -1)
-            [ -n "$ipk" ] || continue
+          echo "== IPK =="
+          for pair in "aarch64-k3.10|aarch64-3.10-kn" "mipsel-k3.4|mipsel-3.4-kn" "mips-k3.4|mips-3.4-kn"; do
+            path="${pair%%|*}"
+            suffix="${pair##*|}"
+            ipk=$(curl -sL "$MIRROR/$path/" | grep -oE "awg-manager_[0-9][^\"'<> ]+_${suffix}\\.ipk" | sort -V | tail -1 || true)
+            if [ -z "$ipk" ]; then
+              echo "skip $path"
+              continue
+            fi
             echo "IPK: $ipk"
             wget -q -O "work/$ipk" "$MIRROR/$path/$ipk"
-            rm -rf work/repack && mkdir -p work/repack/control work/repack/data
-            cd work/repack
-            tar -xzf "../$ipk"
-            tar -xzf control.tar.gz -C control 2>/dev/null || true
-            tar -xzf data.tar.gz -C data 2>/dev/null || true
-            find data -type f -executable 2>/dev/null | while read f; do
-              case "$(head -c 2 "$f" 2>/dev/null)" in '#!') continue;; esac
-              upx --lzma --best "$f" 2>/dev/null || true
-            done
-            tar -czf control.tar.gz -C control .
-            tar -czf data.tar.gz -C data .
-            echo 2.0 > debian-binary
-            tar -czf "../../$OUT/${ipk%.ipk}_compressed.ipk" debian-binary control.tar.gz data.tar.gz
-            cd ../..
+            rm -rf work/repack
+            mkdir -p work/repack/control work/repack/data
+            (
+              cd work/repack
+              tar -xzf "../$ipk"
+              tar -xzf control.tar.gz -C control 2>/dev/null || true
+              tar -xzf data.tar.gz -C data 2>/dev/null || true
+              find data -type f -executable 2>/dev/null | while read -r f; do
+                head2=$(head -c 2 "$f" 2>/dev/null || true)
+                if [ "$head2" = "#!" ]; then
+                  continue
+                fi
+                upx --lzma --best "$f" 2>/dev/null || true
+              done
+              tar -czf control.tar.gz -C control .
+              tar -czf data.tar.gz -C data .
+              echo "2.0" > debian-binary
+              tar -czf "../../$OUT/${ipk%.ipk}_compressed.ipk" debian-binary control.tar.gz data.tar.gz
+            )
           done
 
-          # --- sing-box ---
-          sb_ver=$(curl -sL "$MIRROR/singbox/" | grep -oE 'href="1\.[^"/]+/"' | sed 's/href="//;s/\/"//' | sort -V | tail -1)
-          echo "sing-box: $sb_ver"
+          echo "== sing-box =="
+          sb_ver=$(curl -sL "$MIRROR/singbox/" | grep -oE 'href="1\.[^"/]+/"' | sed 's/href="//;s|/"||' | sort -V | tail -1 || true)
+          echo "sing-box version: $sb_ver"
           if [ -n "$sb_ver" ]; then
             for f in $(curl -sL "$MIRROR/singbox/$sb_ver/" | grep -oE 'singbox-[^"<> ]+' | grep -v sha256 | sort -u); do
+              echo "sing-box: $f"
               wget -q -O "work/$f" "$MIRROR/singbox/$sb_ver/$f"
               cp "work/$f" "$OUT/${f}_compressed"
               chmod +x "$OUT/${f}_compressed"
@@ -61,17 +69,17 @@ jobs:
             done
           fi
 
+          echo "== result =="
           ls -lh "$OUT"
-          echo "OUT_DIR=$OUT" >> $GITHUB_ENV
 
-      - name: Publish release (tag: compressed)
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: compressed
           name: Compressed AWG + sing-box
           body: |
-            Автосборка UPX-сжатых пакетов.
-            Источники: repo.hoaxisr.ru / hoaxisr/amnezia-box
+            Auto-built UPX-compressed packages.
+            Sources: repo.hoaxisr.ru / hoaxisr/amnezia-box
           files: out/*
           make_latest: true
         env:
