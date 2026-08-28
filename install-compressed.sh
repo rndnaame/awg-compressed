@@ -162,12 +162,12 @@ fetch_text() {
 
 # Пункт меню [4]: настройка доступа AWG Manager через WireGuard-туннель
 # Источник: https://github.com/genaRijoff/awgm_tun_wgX
-TUNNEL_SCRIPT_URL="https://raw.githubusercontent.com/genaRijoff/awgm_tun_wgX/main/awg-manager-tunnel-access.sh"
+TUNNEL_SCRIPT_URL="https://raw.githubusercontent.com/rndnaame/awg-compressed/main/awg-manager-tunnel-access.sh"
 
 run_tunnel_access() {
   echo ""
   echo "=== Настройка доступа через туннель ==="
-  echo "Источник: genaRijoff/awgm_tun_wgX"
+  echo "Источник: rndnaame/awg-compressed"
   echo ""
 
   TUN_TMP="/tmp/awg-manager-tunnel-access.sh"

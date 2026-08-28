@@ -32,7 +32,7 @@ wget -qO- https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install
    - **[1]** Установить awg-manager (UPX-версия) — по умолчанию
    - **[2]** Установить sing-box (UPX-версия)
    - **[3]** Установить AWG-M + Sing-Box (UPX-версия)
-   - **[4]** Настроить доступ через туннель ([genaRijoff/awgm_tun_wgX](https://github.com/genaRijoff/awgm_tun_wgX))
+   - **[4]** Настроить доступ через туннель ([awg-manager-tunnel-access.sh](https://github.com/rndnaame/awg-compressed/blob/main/awg-manager-tunnel-access.sh))
 4. Если версия уже стоит — предложит обновить или пропустить
 5. Скачает файл (сначала через `nwg*`, `t2s*`, `opkgtun10`, `awgm0`, потом обычный канал)
 6. Установит пакет / положит бинарник
