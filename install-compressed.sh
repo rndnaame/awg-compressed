@@ -382,8 +382,9 @@ if [ -z "$ASSETS" ]; then
   exit 1
 fi
 
-IPK_URL=$(echo "$ASSETS" | grep -E "$IPK_PAT" | head -1)
-SB_URL=$(echo "$ASSETS" | grep -E "$SB_PAT" | head -1)
+# при нескольких версиях в одном релизе — берём самую новую (sort -V)
+IPK_URL=$(echo "$ASSETS" | grep -E "$IPK_PAT" | sort -V | tail -1)
+SB_URL=$(echo "$ASSETS" | grep -E "$SB_PAT" | sort -V | tail -1)
 
 IPK_NAME=""
 SB_NAME=""

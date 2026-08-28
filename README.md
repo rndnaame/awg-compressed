@@ -8,7 +8,15 @@ UPX-сжатые сборки **awg-manager** и **sing-box** для Keenetic + 
 | Установщик | [`install-compressed.sh`](https://github.com/rndnaame/awg-compressed/blob/main/install-compressed.sh) |
 | Исходники пакетов | [hoaxisr/awg-manager](https://github.com/hoaxisr/awg-manager), [hoaxisr/amnezia-box](https://github.com/hoaxisr/amnezia-box), зеркало [repo.hoaxisr.ru](http://repo.hoaxisr.ru) |
 
-GitHub Actions раз в ~8 часов проверяет зеркало: если появились **новые** версии, сжимает только их и дописывает в release. Уже опубликованные файлы заново не качает.
+GitHub Actions раз в ~8 часов проверяет зеркало: если появились **новые** версии, сжимает только их и публикует **отдельные** релизы:
+
+| Релиз | Пример имени | Тег |
+|-------|----------------|-----|
+| AWG-M | `v2.17.4 (AWG-M UPX)` | `awgm-2.17.4` |
+| sing-box | `1.14.0-rc.1-awgm.15 (sing-box UPX)` | `sb-1.14.0-rc.1-awgm.15` |
+| Latest | оба в одном | **`compressed`** (для установщика) |
+
+Старые файлы в `compressed` удаляются при появлении новых версий.
 
 ---
 
