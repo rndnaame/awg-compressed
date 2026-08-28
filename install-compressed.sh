@@ -420,9 +420,9 @@ if [ -n "$SB_NAME" ]; then
   NEW_SB=$(echo "$SB_NAME" | sed -n 's/^singbox-\(.*\)-\(aarch64\|mipsel\|mips\)-.*/\1/p')
 fi
 
-echo "Доступно в релизе ($TAG):"
+echo "Доступно в релизе:"
 
-# IPK: подсветка, если не установлен или в релизе новее
+# AWG-Manager: подсветка, если не установлен или в релизе новее
 AWG_HL=0
 if [ -n "$NEW_AWG" ]; then
   if [ -z "$CUR_AWG" ]; then
@@ -432,11 +432,11 @@ if [ -n "$NEW_AWG" ]; then
     [ "$_c" = "1" ] && AWG_HL=1
   fi
 fi
-AWG_LINE="   IPK      : ${IPK_NAME:-—}${NEW_AWG:+ ($NEW_AWG)}"
+AWG_LINE="   AWG-Manager : ${NEW_AWG:-—}"
 [ "$AWG_HL" = "1" ] && AWG_LINE="${AWG_LINE}  ← обновление"
 hl_line "$AWG_HL" "$AWG_LINE"
 
-# sing-box: подсветка, если не установлен или версия отличается от релиза
+# Sing-box: подсветка, если не установлен или версия отличается
 SB_HL=0
 if [ -n "$NEW_SB" ]; then
   if [ -z "$CUR_SB_RAW" ]; then
@@ -448,17 +448,11 @@ if [ -n "$NEW_SB" ]; then
     esac
   fi
 fi
-SB_LINE="   sing-box : ${SB_NAME:-—}${NEW_SB:+ ($NEW_SB)}"
+SB_LINE="   Sing-box    : ${NEW_SB:-—}"
 [ "$SB_HL" = "1" ] && SB_LINE="${SB_LINE}  ← обновление"
 hl_line "$SB_HL" "$SB_LINE"
 
 echo ""
-if [ "$AWG_HL" = "1" ] || [ "$SB_HL" = "1" ]; then
-  printf '%b%s%b
-' "$HL_UPD" "⚡ Есть доступные обновления (строки выделены)" "$HL_RST"
-  echo ""
-fi
-
 # --- меню ---
 DO_AWG=""
 DO_SB=""
