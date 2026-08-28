@@ -39,7 +39,7 @@ jobs:
             echo "sb_tag="
             echo "awg_name="
             echo "sb_name="
-            echo "rolling_name=Compressed AWG + sing-box"
+            echo "rolling_name=Compressed AWG + sing-box (latest)"
           } >> "$GITHUB_OUTPUT"
 
           upx_fast() {
@@ -91,6 +91,7 @@ jobs:
             done
           fi
           sort -u /tmp/wanted.txt -o /tmp/wanted.txt
+          cp /tmp/wanted.txt wanted.txt
 
           AWG_TAG=""
           SB_TAG=""
@@ -104,16 +105,15 @@ jobs:
             SB_NAME="${SB_VER} (sing-box UPX)"
             SB_TAG=$(echo "sb-${SB_VER}" | sed 's/[^a-zA-Z0-9._-]/-/g')
           fi
-          ROLLING_NAME=""
-          [ -n "$AWG_NAME" ] && ROLLING_NAME="$AWG_NAME"
-          if [ -n "$SB_NAME" ]; then
-            if [ -n "$ROLLING_NAME" ]; then
-              ROLLING_NAME="${ROLLING_NAME} · ${SB_NAME}"
+          ROLLING_NAME="Latest UPX"
+          [ -n "$AWG_VER" ] && ROLLING_NAME="v${AWG_VER} (AWG-M UPX)"
+          if [ -n "$SB_VER" ]; then
+            if [ "$ROLLING_NAME" = "Latest UPX" ]; then
+              ROLLING_NAME="${SB_VER} (sing-box UPX)"
             else
-              ROLLING_NAME="$SB_NAME"
+              ROLLING_NAME="${ROLLING_NAME} · ${SB_VER} (sing-box UPX)"
             fi
           fi
-          [ -z "$ROLLING_NAME" ] && ROLLING_NAME="Compressed AWG + sing-box"
 
           echo "awg_ver=$AWG_VER" >> "$GITHUB_OUTPUT"
           echo "sb_ver=$SB_VER" >> "$GITHUB_OUTPUT"
@@ -122,11 +122,9 @@ jobs:
           echo "awg_name=$AWG_NAME" >> "$GITHUB_OUTPUT"
           echo "sb_name=$SB_NAME" >> "$GITHUB_OUTPUT"
           echo "rolling_name=$ROLLING_NAME" >> "$GITHUB_OUTPUT"
-          echo "  AWG: $AWG_NAME / $AWG_TAG"
-          echo "  SB:  $SB_NAME / $SB_TAG"
 
           echo ""
-          echo "== Ассеты rolling $ROLLING_TAG =="
+          echo "== Ассеты rolling «${ROLLING_TAG}» (только latest) =="
           : > /tmp/existing.txt
           API_JSON=$(curl -sL \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
@@ -138,8 +136,7 @@ jobs:
             HTML=$(curl -sL "https://github.com/${OUR_REPO}/releases/expanded_assets/${ROLLING_TAG}" || true)
             echo "$HTML" | grep -oE 'releases/download/[^"]+' | sed 's|.*/||' >> /tmp/existing.txt || true
           fi
-          grep -v '^$' /tmp/existing.txt | sort -u > /tmp/existing.sorted
-          mv /tmp/existing.sorted /tmp/existing.txt
+          grep -v '^$' /tmp/existing.txt | sort -u > /tmp/e2 && mv /tmp/e2 /tmp/existing.txt
           sed 's/^/  • /' /tmp/existing.txt 2>/dev/null || echo "  (пусто)"
 
           : > /tmp/todo.txt
@@ -161,50 +158,47 @@ jobs:
             fi
           done < /tmp/wanted.txt
 
-          cp /tmp/wanted.txt wanted.txt
-
-          # body-файлы
           {
-            echo "### awg-manager UPX \`${AWG_VER:-?}\`"
+            echo "### ${AWG_NAME:-awg-manager UPX}"
             echo ""
-            echo "Официальный IPK, бинарники сжаты UPX."
-            echo "Источник: repo.hoaxisr.ru / hoaxisr/awg-manager"
+            echo "Архивный топик-релиз — **не удаляется** при выходе новых версий."
             echo ""
-            echo "Установка: \`curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh\` → пункт [1]"
-            echo ""
-            echo "Актуальный набор также в теге \`${ROLLING_TAG}\`."
-          } > release-body-awg.md
-
-          {
-            echo "### sing-box UPX \`${SB_VER:-?}\`"
-            echo ""
-            echo "Бинарники Entware (aarch64 / mips / mipsel), сжаты UPX."
-            echo "Источник: repo.hoaxisr.ru/singbox / hoaxisr/amnezia-box"
-            echo ""
-            echo "Установка: \`curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh\` → пункт [2]"
-            echo ""
-            echo "Актуальный набор также в теге \`${ROLLING_TAG}\`."
-          } > release-body-sb.md
-
-          {
-            echo "### Latest UPX builds"
-            echo ""
-            [ -n "$AWG_VER" ] && echo "- **awg-manager:** v${AWG_VER}"
-            [ -n "$SB_VER" ] && echo "- **sing-box:** ${SB_VER}"
-            echo ""
-            echo "Источники: repo.hoaxisr.ru"
+            echo "Актуальные файлы для установщика всегда в теге \`${ROLLING_TAG}\`."
             echo ""
             echo '```sh'
             echo "curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
             echo '```'
+          } > release-body-awg.md
+
+          {
+            echo "### ${SB_NAME:-sing-box UPX}"
             echo ""
-            echo "Отдельные топики:"
-            [ -n "$AWG_TAG" ] && echo "- AWG-M: \`${AWG_TAG}\`"
-            [ -n "$SB_TAG" ] && echo "- sing-box: \`${SB_TAG}\`"
+            echo "Архивный топик-релиз — **не удаляется** при выходе новых версий."
+            echo ""
+            echo "Актуальные файлы для установщика всегда в теге \`${ROLLING_TAG}\`."
+            echo ""
+            echo '```sh'
+            echo "curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
+            echo '```'
+          } > release-body-sb.md
+
+          {
+            echo "### Latest only (\`${ROLLING_TAG}\`)"
+            echo ""
+            echo "В этом релизе **только крайние** версии с зеркала. Старые файлы отсюда удаляются."
+            echo ""
+            [ -n "$AWG_VER" ] && echo "- awg-manager: **v${AWG_VER}** → топик \`${AWG_TAG}\`"
+            [ -n "$SB_VER" ] && echo "- sing-box: **${SB_VER}** → топик \`${SB_TAG}\`"
+            echo ""
+            echo "История версий хранится в отдельных релизах \`awgm-*\` и \`sb-*\` (не трогаем)."
+            echo ""
+            echo '```sh'
+            echo "curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
+            echo '```'
           } > release-body-rolling.md
 
           if [ "$NEED" -eq 0 ]; then
-            echo ">>> Всё актуально — только prune при необходимости"
+            echo ">>> Сжимать нечего (файлы уже в ${ROLLING_TAG})"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -214,7 +208,7 @@ jobs:
           [ "$NEED_SB" -eq 1 ] && echo "skip_sb=false" >> "$GITHUB_OUTPUT"
 
           echo ""
-          echo "== Сборка =="
+          echo "== Сборка недостающего =="
           while IFS='|' read -r kind a b want; do
             [ -n "$want" ] || continue
             grep -qxF "$want" /tmp/todo.txt || continue
@@ -256,15 +250,16 @@ jobs:
             fi
           done < /tmp/wanted_src.txt
 
-          echo "== out =="
-          ls -lh out/awg out/sb out 2>/dev/null || true
+          ls -lh out/awg out/sb 2>/dev/null || true
           if ! ls out/awg/* out/sb/* >/dev/null 2>&1; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "skip_awg=true" >> "$GITHUB_OUTPUT"
             echo "skip_sb=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Prune old assets from compressed
+      # Только тег compressed: выкидываем всё, чего нет на зеркале.
+      # Топики awgm-* / sb-* НЕ удаляем и не трогаем.
+      - name: Prune compressed to latest only
         if: always() && steps.build.outcome == 'success'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -273,27 +268,41 @@ jobs:
           OUR_REPO="${{ github.repository }}"
           TAG="compressed"
           [ -f wanted.txt ] || { echo "no wanted.txt"; exit 0; }
-          JSON=$(curl -sL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${OUR_REPO}/releases/tags/${TAG}")
-          echo "$JSON" | jq -e '.id' >/dev/null 2>&1 || { echo "no release $TAG"; exit 0; }
+
+          echo "Крайние версии (оставить в $TAG):"
+          sed 's/^/  /' wanted.txt
+
+          JSON=$(curl -sL \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OUR_REPO}/releases/tags/${TAG}" || true)
+
+          if ! echo "$JSON" | jq -e '.id' >/dev/null 2>&1; then
+            echo "Релиза $TAG ещё нет"
+            exit 0
+          fi
+
+          echo ""
+          echo "Очистка ассетов только в теге $TAG (другие релизы не трогаем):"
           echo "$JSON" | jq -c '.assets[]?' | while read -r row; do
             name=$(echo "$row" | jq -r '.name')
             aid=$(echo "$row" | jq -r '.id')
             case "$name" in
               awg-manager_*_compressed.ipk|singbox-*_compressed) ;;
-              *) continue ;;
+              *) echo "  keep (other): $name"; continue ;;
             esac
             if grep -qxF "$name" wanted.txt; then
-              echo "keep $name"
+              echo "  keep latest: $name"
             else
-              echo "DELETE $name"
-              curl -sL -X DELETE -H "Authorization: Bearer $GITHUB_TOKEN" \
+              echo "  DELETE from $TAG: $name"
+              curl -sL -o /dev/null -w "    HTTP %{http_code}\n" -X DELETE \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
                 -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/repos/${OUR_REPO}/releases/assets/${aid}" >/dev/null || true
+                "https://api.github.com/repos/${OUR_REPO}/releases/assets/${aid}" || true
             fi
           done
 
-      - name: Publish AWG-M release
+      - name: Publish AWG-M topic (архив, навсегда)
         if: steps.build.outputs.skip_awg != 'true' && steps.build.outputs.awg_tag != ''
         uses: softprops/action-gh-release@v2
         with:
@@ -305,7 +314,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish sing-box release
+      - name: Publish sing-box topic (архив, навсегда)
         if: steps.build.outputs.skip_sb != 'true' && steps.build.outputs.sb_tag != ''
         uses: softprops/action-gh-release@v2
         with:
@@ -317,7 +326,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update rolling release (compressed)
+      - name: Update compressed (только latest)
         if: steps.build.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
