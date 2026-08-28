@@ -80,6 +80,19 @@ jobs:
           body: |
             Auto-built UPX-compressed packages.
             Sources: repo.hoaxisr.ru / hoaxisr/amnezia-box
+
+            ## Установка на роутере (одна команда)
+
+            ```sh
+            curl -sL https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh | sh
+            ```
+
+            Или wget:
+            ```sh
+            wget -qO- https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh | sh
+            ```
+
+            Скрипт сам определит архитектуру (aarch64 / mipsel / mips), скачает нужный IPK и sing-box, установит.
           files: out/*
           make_latest: true
         env:
