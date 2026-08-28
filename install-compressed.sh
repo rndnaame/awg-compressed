@@ -438,7 +438,7 @@ if [ -n "$NEW_AWG" ]; then
   fi
 fi
 AWG_LINE="   awg-manager : ${NEW_AWG:-—}"
-[ "$AWG_HL" = "1" ] && AWG_LINE="${AWG_LINE}  ← обновление"
+[ "$AWG_HL" = "1" ] && AWG_LINE="${AWG_LINE}  ⚡"
 hl_line "$AWG_HL" "$AWG_LINE"
 
 # Sing-box: подсветка, если не установлен или версия отличается
@@ -454,7 +454,7 @@ if [ -n "$NEW_SB" ]; then
   fi
 fi
 SB_LINE="   sing-box    : ${NEW_SB:-—}"
-[ "$SB_HL" = "1" ] && SB_LINE="${SB_LINE}  ← обновление"
+[ "$SB_HL" = "1" ] && SB_LINE="${SB_LINE}  ⚡"
 hl_line "$SB_HL" "$SB_LINE"
 
 echo ""
