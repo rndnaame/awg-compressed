@@ -194,7 +194,8 @@ run_tunnel_access() {
   # Без /dev/tty дочернее меню читает оставшиеся строки install-скрипта
   # как ответы и «крутится» много раз.
   if [ -r /dev/tty ]; then
-    sh "$TUN_TMP" < /dev/tty
+    # subshell: fd 0 = tty so all reads block on real terminal
+    ( cd /tmp && exec </dev/tty >/dev/tty 2>/dev/tty; sh "$TUN_TMP" )
   else
     sh "$TUN_TMP"
   fi

@@ -60,6 +60,27 @@ say() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
 die() { warn "ОШИБКА: $*"; exit 1; }
 
+
+# Интерактивный ввод всегда с /dev/tty (иначе при curl|sh меню читает мусор/пустоту).
+read_tty() {
+    _prompt="$1"
+    _var="$2"
+    if [ -n "$_prompt" ]; then
+        if [ -w /dev/tty ]; then
+            printf '%s' "$_prompt" > /dev/tty
+        else
+            printf '%s' "$_prompt"
+        fi
+    fi
+    if [ -r /dev/tty ]; then
+        IFS= read -r "$_var" < /dev/tty || return 1
+    else
+        IFS= read -r "$_var" || return 1
+    fi
+    return 0
+}
+
+
 cleanup() {
     [ "$LOCK_OWNED" = "1" ] && rm -f "$LOCK_FILE"
     rm -f "$TMP_LIST" "$TMP_SETTINGS" "$TMP_STATE"
@@ -323,8 +344,9 @@ select_wg() {
         n=$((n + 1))
     done < "$TMP_LIST"
 
-    printf "Выбор [1-%s, 0=отмена]: " "$((n - 1))"
-    read -r choice
+    if ! read_tty "Выбор [1-$((n - 1)), 0=отмена]: " choice; then
+        return 1
+    fi
 
     case "$choice" in
         0|"") return 1 ;;
@@ -367,7 +389,7 @@ ensure_backup() {
             say "Это состояние будет сохранено как точка отката (\"исходное\")."
             say "Если это не так — сначала поправь settings.json/security-level вручную."
             printf "Продолжить и считать текущее состояние исходным? [y/N]: "
-            read -r confirm_extra
+            if ! read_tty "" confirm_extra; then confirm_extra=""; fi
             case "$confirm_extra" in
                 y|Y|д|Д) ;;
                 *) say "Отменено."; return 1 ;;
@@ -496,7 +518,7 @@ configure_access() {
     say ""
 
     printf "Продолжить? [y/N]: "
-    read -r answer
+    if ! read_tty "" answer; then answer=""; fi
     case "$answer" in
         y|Y|д|Д) ;;
         *) say "Отменено."; return 0 ;;
@@ -561,7 +583,7 @@ restore_all() {
     say ""
 
     printf "ТОЧНО вернуть всё как было? [y/N]: "
-    read -r answer
+    if ! read_tty "" answer; then answer=""; fi
     case "$answer" in
         y|Y|д|Д) ;;
         *) say "Отменено."; return 0 ;;
@@ -655,6 +677,7 @@ show_status() {
 }
 
 menu() {
+    empty_streak=0
     while :; do
         say ""
         say "========================================"
@@ -667,15 +690,27 @@ menu() {
         say "0. Выход"
         say ""
 
-        printf "Выберите [0-3]: "
-        read -r choice || exit 0
+        if ! read_tty "Выберите [0-3]: " choice; then
+            say "Нет ввода (EOF) — выход."
+            exit 0
+        fi
 
         case "$choice" in
-            1) configure_access ;;
-            2) restore_all ;;
-            3) show_status ;;
+            1) empty_streak=0; configure_access ;;
+            2) empty_streak=0; restore_all ;;
+            3) empty_streak=0; show_status ;;
             0) exit 0 ;;
-            *) say "Неверный выбор." ;;
+            "")
+                empty_streak=$((empty_streak + 1))
+                if [ "$empty_streak" -ge 3 ]; then
+                    say "Повторный пустой ввод — выход."
+                    exit 0
+                fi
+                ;;
+            *)
+                empty_streak=0
+                say "Неверный выбор."
+                ;;
         esac
     done
 }
