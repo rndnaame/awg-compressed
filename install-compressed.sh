@@ -190,8 +190,14 @@ run_tunnel_access() {
   chmod +x "$TUN_TMP"
   echo "→ Запуск $TUN_TMP ..."
   echo ""
-  # скрипт сам проверяет root, jq, ndmc, awg-manager
-  sh "$TUN_TMP"
+  # Важно: при запуске через «curl | sh» stdin — это труба со скриптом.
+  # Без /dev/tty дочернее меню читает оставшиеся строки install-скрипта
+  # как ответы и «крутится» много раз.
+  if [ -r /dev/tty ]; then
+    sh "$TUN_TMP" < /dev/tty
+  else
+    sh "$TUN_TMP"
+  fi
   rc=$?
   rm -f "$TUN_TMP"
   return "$rc"
