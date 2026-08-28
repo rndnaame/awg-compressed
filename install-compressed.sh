@@ -53,65 +53,91 @@ ver_cmp() {
   fi
 }
 
-# Скачивание с таймаутом и перебором интерфейсов (default → nwg0/1 → t2s0/1)
-# Использование: download_file URL OUTFILE
-#   DL_IFACES="nwg0 t2s0" download_file ...  — свой список
+# Жёсткий таймаут процесса (curl на роутере часто игнорирует --max-time)
+run_timeout() {
+  secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@" 2>/dev/null
+    return $?
+  fi
+  # fallback: фоновый процесс + kill
+  "$@" 2>/dev/null &
+  pid=$!
+  i=0
+  while [ "$i" -lt "$secs" ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid"
+      return $?
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  return 124
+}
+
+# Скачивание: сначала туннели (nwg/t2s), default — последним
+# DL_IFACES="nwg0 t2s0" — свой порядок
 download_file() {
   url="$1"
   out="$2"
   min_size="${3:-1000}"
+  # на попытку: connect быстро, весь файл не дольше ~45с на iface
+  try_secs="${DL_TIMEOUT:-45}"
 
   rm -f "$out"
-  ifaces="${DL_IFACES:-__default__ nwg0 nwg1 t2s0 t2s1}"
+  # туннели первыми — GitHub через WAN часто «висит»
+  ifaces="${DL_IFACES:-nwg0 nwg1 t2s0 t2s1 __default__}"
 
   for iface in $ifaces; do
     if [ "$iface" = "__default__" ]; then
       label="default"
       iface_opt=""
     else
-      # интерфейс может отсутствовать — пропускаем быстро
       if ! ip link show "$iface" >/dev/null 2>&1 && ! ifconfig "$iface" >/dev/null 2>&1; then
-        echo "   ⏭  $iface — нет такого интерфейса"
+        echo "   ⏭  $iface — нет интерфейса"
         continue
       fi
       label="$iface"
       iface_opt="--interface $iface"
     fi
 
-    echo "   ↻ через $label ..."
-    # curl с жёсткими таймаутами (не виснет)
+    echo "   ↻ через $label (макс ${try_secs}с) ..."
+    rm -f "$out"
     # shellcheck disable=SC2086
-    if curl -fL --connect-timeout 12 --max-time 180 --retry 1 --retry-delay 1 \
-         $iface_opt -o "$out" "$url" 2>/dev/null; then
-      if [ -s "$out" ] && [ "$(wc -c < "$out")" -ge "$min_size" ]; then
-        echo "   ✓ скачано через $label ($(du -h "$out" | awk '{print $1}'))"
-        return 0
-      fi
+    run_timeout "$try_secs" curl -fL --connect-timeout 8 --max-time "$try_secs" \
+      --speed-time 15 --speed-limit 1000 \
+      $iface_opt -o "$out" "$url"
+    rc=$?
+    if [ -s "$out" ] && [ "$(wc -c < "$out" 2>/dev/null || echo 0)" -ge "$min_size" ]; then
+      echo "   ✓ скачано через $label ($(du -h "$out" | awk '{print $1}'))"
+      return 0
     fi
+    [ "$rc" = "124" ] && echo "   ⏱  таймаут $label"
     rm -f "$out"
 
-    # запасной wget (если curl не смог; bind по iface у busybox wget часто нет)
-    if [ "$iface" = "__default__" ]; then
-      if command -v wget >/dev/null 2>&1; then
-        if wget -q -T 20 -O "$out" "$url" 2>/dev/null; then
-          if [ -s "$out" ] && [ "$(wc -c < "$out")" -ge "$min_size" ]; then
-            echo "   ✓ скачано через wget ($(du -h "$out" | awk '{print $1}'))"
-            return 0
-          fi
-        fi
-        rm -f "$out"
+    # wget только для default (без bind iface)
+    if [ "$iface" = "__default__" ] && command -v wget >/dev/null 2>&1; then
+      echo "   ↻ wget default (макс ${try_secs}с) ..."
+      run_timeout "$try_secs" wget -q -T 15 -O "$out" "$url"
+      if [ -s "$out" ] && [ "$(wc -c < "$out" 2>/dev/null || echo 0)" -ge "$min_size" ]; then
+        echo "   ✓ скачано через wget ($(du -h "$out" | awk '{print $1}'))"
+        return 0
       fi
+      rm -f "$out"
     fi
   done
 
-  echo "   ✗ не удалось скачать: $url"
+  echo "   ✗ не удалось скачать"
   return 1
 }
 
-# Лёгкий curl для JSON/HTML (короткий таймаут + iface fallback)
 fetch_text() {
   url="$1"
-  ifaces="__default__ nwg0 nwg1 t2s0 t2s1"
+  try_secs=20
+  ifaces="nwg0 nwg1 t2s0 t2s1 __default__"
   for iface in $ifaces; do
     if [ "$iface" = "__default__" ]; then
       iface_opt=""
@@ -119,12 +145,16 @@ fetch_text() {
       ip link show "$iface" >/dev/null 2>&1 || ifconfig "$iface" >/dev/null 2>&1 || continue
       iface_opt="--interface $iface"
     fi
+    tmpf=$(mktemp 2>/dev/null || echo "/tmp/ft_$$")
     # shellcheck disable=SC2086
-    out=$(curl -fsL --connect-timeout 8 --max-time 25 $iface_opt "$url" 2>/dev/null) || out=""
-    if [ -n "$out" ]; then
-      echo "$out"
+    run_timeout "$try_secs" curl -fsL --connect-timeout 6 --max-time "$try_secs" \
+      $iface_opt -o "$tmpf" "$url"
+    if [ -s "$tmpf" ]; then
+      cat "$tmpf"
+      rm -f "$tmpf"
       return 0
     fi
+    rm -f "$tmpf"
   done
   return 1
 }
@@ -352,7 +382,7 @@ if [ "$DO_AWG" = "1" ]; then
   echo ""
   echo "⬇ Скачиваем $IPK_NAME ..."
   if ! download_file "$IPK_URL" "$IPK_NAME" 100000; then
-    echo "❌ Ошибка скачивания IPK (пробовали default, nwg0, nwg1, t2s0, t2s1)"
+    echo "❌ Ошибка скачивания IPK (пробовали nwg0/1, t2s0/1, default)"
     exit 1
   fi
 
@@ -381,7 +411,7 @@ if [ "$DO_SB" = "1" ]; then
   echo ""
   echo "⬇ Скачиваем $SB_NAME ..."
   if ! download_file "$SB_URL" "$SB_NAME" 100000; then
-    echo "❌ Ошибка скачивания sing-box (пробовали default, nwg0, nwg1, t2s0, t2s1)"
+    echo "❌ Ошибка скачивания sing-box (пробовали nwg0/1, t2s0/1, default)"
     exit 1
   fi
   mkdir -p "$SINGBOX_DIR"
