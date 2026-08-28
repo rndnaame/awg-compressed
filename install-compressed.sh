@@ -40,6 +40,24 @@ yes_no() {
   esac
 }
 
+# Подсветка строки, если доступно обновление (жёлтый жирный)
+# Отключается: NO_COLOR=1
+HL_UPD='[1;93m'
+HL_OK='[0;32m'
+HL_RST='[0m'
+[ -n "$NO_COLOR" ] && HL_UPD='' && HL_OK='' && HL_RST=''
+
+hl_line() {
+  # $1 = 1 подсветить как update, 0 = обычно
+  if [ "$1" = "1" ]; then
+    printf '%b%s%b
+' "$HL_UPD" "$2" "$HL_RST"
+  else
+    printf '%s
+' "$2"
+  fi
+}
+
 # сравнение версий: 0 = equal, 1 = v1 > v2, 2 = v1 < v2
 ver_cmp() {
   v1="$1"
@@ -403,9 +421,43 @@ if [ -n "$SB_NAME" ]; then
 fi
 
 echo "Доступно в релизе ($TAG):"
-echo "   IPK      : ${IPK_NAME:-—} ${NEW_AWG:+($NEW_AWG)}"
-echo "   sing-box : ${SB_NAME:-—} ${NEW_SB:+($NEW_SB)}"
+
+# IPK: подсветка, если не установлен или в релизе новее
+AWG_HL=0
+if [ -n "$NEW_AWG" ]; then
+  if [ -z "$CUR_AWG" ]; then
+    AWG_HL=1
+  else
+    _c=$(ver_cmp "$NEW_AWG" "$CUR_AWG")
+    [ "$_c" = "1" ] && AWG_HL=1
+  fi
+fi
+AWG_LINE="   IPK      : ${IPK_NAME:-—}${NEW_AWG:+ ($NEW_AWG)}"
+[ "$AWG_HL" = "1" ] && AWG_LINE="${AWG_LINE}  ← обновление"
+hl_line "$AWG_HL" "$AWG_LINE"
+
+# sing-box: подсветка, если не установлен или версия отличается от релиза
+SB_HL=0
+if [ -n "$NEW_SB" ]; then
+  if [ -z "$CUR_SB_RAW" ]; then
+    SB_HL=1
+  else
+    case "$CUR_SB_RAW" in
+      *"$NEW_SB"*) SB_HL=0 ;;
+      *) SB_HL=1 ;;
+    esac
+  fi
+fi
+SB_LINE="   sing-box : ${SB_NAME:-—}${NEW_SB:+ ($NEW_SB)}"
+[ "$SB_HL" = "1" ] && SB_LINE="${SB_LINE}  ← обновление"
+hl_line "$SB_HL" "$SB_LINE"
+
 echo ""
+if [ "$AWG_HL" = "1" ] || [ "$SB_HL" = "1" ]; then
+  printf '%b%s%b
+' "$HL_UPD" "⚡ Есть доступные обновления (строки выделены)" "$HL_RST"
+  echo ""
+fi
 
 # --- меню ---
 DO_AWG=""
