@@ -159,6 +159,44 @@ fetch_text() {
   return 1
 }
 
+
+# Пункт меню [4]: настройка доступа AWG Manager через WireGuard-туннель
+# Источник: https://github.com/genaRijoff/awgm_tun_wgX
+TUNNEL_SCRIPT_URL="https://raw.githubusercontent.com/genaRijoff/awgm_tun_wgX/main/awg-manager-tunnel-access.sh"
+
+run_tunnel_access() {
+  echo ""
+  echo "=== Настройка доступа через туннель ==="
+  echo "Источник: genaRijoff/awgm_tun_wgX"
+  echo ""
+
+  TUN_TMP="/tmp/awg-manager-tunnel-access.sh"
+  rm -f "$TUN_TMP"
+
+  if ! download_file "$TUNNEL_SCRIPT_URL" "$TUN_TMP" 500; then
+    echo "❌ Не удалось скачать скрипт настройки туннеля"
+    echo "   URL: $TUNNEL_SCRIPT_URL"
+    return 1
+  fi
+
+  # проверка, что это shell-скрипт, а не HTML-ошибка GitHub
+  if ! head -1 "$TUN_TMP" | grep -q '^#!'; then
+    echo "❌ Скачанный файл не похож на скрипт (нет shebang)"
+    head -5 "$TUN_TMP" | sed 's/^/   /'
+    rm -f "$TUN_TMP"
+    return 1
+  fi
+
+  chmod +x "$TUN_TMP"
+  echo "→ Запуск $TUN_TMP ..."
+  echo ""
+  # скрипт сам проверяет root, jq, ndmc, awg-manager
+  sh "$TUN_TMP"
+  rc=$?
+  rm -f "$TUN_TMP"
+  return "$rc"
+}
+
 echo "=== Установка compressed AWG + sing-box ==="
 echo ""
 
@@ -276,16 +314,21 @@ if [ -n "$INSTALL_AWG" ] || [ -n "$INSTALL_SB" ]; then
   [ "$DO_SB" = "1" ] && SB_MODE="install"
 else
   echo "Что сделать?"
-  echo "  [1] Только awg-manager"
-  echo "  [2] Только sing-box"
-  echo "  [3] Оба"
+  echo "  [1] Установить awg-manager (UPX-версия)"
+  echo "  [2] Установить sing-box (UPX-версия)"
+  echo "  [3] Установить AWG-M + Sing-Box (UPX-версия)"
+  echo "  [4] Настроить доступ через туннель"
   echo "  [0] Отмена"
   echo ""
-  choice=$(ask "Выбор [0-3], по умолчанию 1: " "1")
+  choice=$(ask "Выбор [0-4], по умолчанию 1: " "1")
   case "$choice" in
     1) DO_AWG=1; DO_SB=0 ;;
     2) DO_AWG=0; DO_SB=1 ;;
     3) DO_AWG=1; DO_SB=1 ;;
+    4)
+      run_tunnel_access
+      exit $?
+      ;;
     0|n|N|q|Q) echo "Отменено."; exit 0 ;;
     *) echo "Неверный выбор."; exit 1 ;;
   esac
