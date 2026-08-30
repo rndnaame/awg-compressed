@@ -50,11 +50,9 @@ HL_RST='[0m'
 hl_line() {
   # $1 = 1 подсветить как update, 0 = обычно
   if [ "$1" = "1" ]; then
-    printf '%b%s%b
-' "$HL_UPD" "$2" "$HL_RST"
+    printf '%b%s%b\n' "$HL_UPD" "$2" "$HL_RST"
   else
-    printf '%s
-' "$2"
+    printf '%s\n' "$2"
   fi
 }
 
@@ -178,10 +176,10 @@ fetch_text() {
 }
 
 
-# Пункт меню [4]: установка AWG Manager с выбором версии (официальный IPK)
+# Пункт меню [4]: установка awg-manager с выбором версии (официальный IPK)
 install_awg_version_select() {
   echo ""
-  echo "=== Установка AWG Manager (выбор версии) ==="
+  echo "=== Установка awg-manager (выбор версии) ==="
   echo ""
 
   case "$ARCH" in
@@ -276,7 +274,7 @@ install_awg_version_select() {
   return 0
 }
 
-# Пункт меню [5]: настройка доступа AWG Manager через WireGuard-туннель
+# Пункт меню [5]: настройка доступа awg-manager через WireGuard-туннель
 # Источник: https://github.com/genaRijoff/awgm_tun_wgX
 TUNNEL_SCRIPT_URL="https://raw.githubusercontent.com/rndnaame/awg-compressed/main/awg-manager-tunnel-access.sh"
 
@@ -320,7 +318,7 @@ run_tunnel_access() {
   return "$rc"
 }
 
-echo "=== Установка compressed AWG + sing-box ==="
+echo "=== Установка compressed awg-manager + sing-box ==="
 echo ""
 
 # --- архитектура ---
@@ -373,7 +371,7 @@ else
   echo "   awg-manager : не установлен"
 fi
 if [ -n "$CUR_SB_VER" ]; then
-  echo "   Sing-box    : $CUR_SB_VER"
+  echo "   sing-box    : $CUR_SB_VER"
 elif [ -n "$CUR_SB_RAW" ]; then
   # запасной разбор, если версия не вытащилась regex'ом
   _sb=$(echo "$CUR_SB_RAW" | sed -n 's/.*[Vv]ersion[[:space:]]*//p' | awk '{print $1}')
@@ -427,7 +425,7 @@ fi
 
 echo "Доступно в релизе:"
 
-# AWG-Manager: подсветка, если не установлен или в релизе новее
+# awg-manager: подсветка, если не установлен или в релизе новее
 AWG_HL=0
 if [ -n "$NEW_AWG" ]; then
   if [ -z "$CUR_AWG" ]; then
@@ -441,7 +439,7 @@ AWG_LINE="   awg-manager : ${NEW_AWG:-—}"
 [ "$AWG_HL" = "1" ] && AWG_LINE="${AWG_LINE}  ⚡"
 hl_line "$AWG_HL" "$AWG_LINE"
 
-# Sing-box: подсветка, если не установлен или версия отличается
+# sing-box: подсветка, если не установлен или версия отличается
 SB_HL=0
 if [ -n "$NEW_SB" ]; then
   if [ -z "$CUR_SB_RAW" ]; then
@@ -470,9 +468,10 @@ if [ -n "$INSTALL_AWG" ] || [ -n "$INSTALL_SB" ]; then
   [ "$DO_AWG" = "1" ] && AWG_MODE="install"
   [ "$DO_SB" = "1" ] && SB_MODE="install"
 else
+  echo "Что сделать?"
   echo "  [1] Установка awg-manager (UPX-версия)"
   echo "  [2] Установка sing-box (UPX-версия)"
-  echo "  [3] Установка awg-manager + sing-Box (UPX-версия)"
+  echo "  [3] Установка awg-manager + sing-box (UPX-версия)"
   echo "  [4] Установка awg-manager (с выбором версии)"
   echo "  [5] Настроить доступ через туннель"
   echo "  [0] Отмена"
