@@ -8,7 +8,7 @@ UPX-сжатые сборки **awg-manager** и **sing-box** для Keenetic + 
 | Установщик | [`install-compressed.sh`](https://github.com/rndnaame/awg-compressed/blob/main/install-compressed.sh) |
 | Исходники пакетов | [hoaxisr/awg-manager](https://github.com/hoaxisr/awg-manager), [hoaxisr/amnezia-box](https://github.com/hoaxisr/amnezia-box), зеркало [repo.hoaxisr.ru](http://repo.hoaxisr.ru) |
 
-GitHub Actions раз в ~8 часов проверяет зеркало и публикует:
+GitHub Actions раз в ~12 часов проверяет зеркало и публикует:
 
 | Релиз | Пример | Поведение |
 |-------|--------|-----------|
