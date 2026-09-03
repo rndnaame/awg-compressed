@@ -4,8 +4,9 @@
 # Russian interface
 #
 # Purpose:
-#   Give AWG Manager access through a selected Keenetic WireGuard
-#   interface and provide a reliable rollback to the exact saved state.
+#   Give AWG Manager access through a selected Keenetic tunnel interface
+#   (WireGuard nwgN or ZeroTier ztN) and provide a reliable rollback
+#   to the exact saved state.
 #
 # Requirements:
 #   - KeeneticOS with ndmc
@@ -47,9 +48,10 @@ FULL_SETTINGS="$BACKUP_ROOT/settings.json"
 LOCK_FILE="/tmp/awg-manager-tunnel-access.lock"
 
 MAX_WG_INDEX=63
+MAX_ZT_INDEX=15
 PORT_WAIT_SECONDS=10
 
-TMP_LIST="/tmp/awg-wg-list.$$"
+TMP_LIST="/tmp/awg-tun-list.$$"
 TMP_SETTINGS="$AWG_DIR/.settings.tmp.$$"
 TMP_STATE="$BACKUP_ROOT/.state.tmp.$$"
 
@@ -250,17 +252,23 @@ remove_interface_from_awg() {
 }
 
 # ---------------------------------------------------------------------------
-# WireGuard interface discovery (Keenetic CLI side)
+# Tunnel interface discovery (WireGuard + ZeroTier, Keenetic CLI)
 # ---------------------------------------------------------------------------
+#
+# Keenetic names:
+#   WireguardN  -> Linux nwgN
+#   ZeroTierN   -> Linux ztN  (ndmc: ZeroTier0, ZeroTier1, ...)
+#
+# Парсеры печатают 5 полей через TAB: ip, desc, sec, state, link.
+# Пустые значения → "-" (чтобы IFS=TAB не схлопывал поля).
 
-# Оба парсера печатают 5 полей через TAB: ip, desc, sec, state, link.
-# Пустые значения заменяются на "-": при разборе строки через IFS=TAB
-# пустые поля схлопываются (TAB — whitespace для field splitting).
-
-parse_wg_json() {
-    printf '%s' "$1" | jq -r '
+parse_tun_json() {
+    # $1 = raw json, $2 = expected type (wireguard|zerotier), case-insensitive
+    _want="$2"
+    printf '%s' "$1" | jq -r --arg want "$_want" '
         def d: if . == null or . == "" then "-" else . end;
-        if ((.type // "") | ascii_downcase) == "wireguard" then
+        (($.type // "") | ascii_downcase) as $t |
+        if $t == $want then
             [ (.address | d),
               (.description | d),
               (."security-level" | d),
@@ -269,10 +277,12 @@ parse_wg_json() {
         else empty end' 2>/dev/null
 }
 
-parse_wg_text() {
+parse_tun_text() {
+    # $1 = raw text, $2 = expected type substring (wireguard|zerotier)
     _o="$1"
+    _want="$2"
 
-    printf '%s' "$_o" | grep -qi 'type:[[:space:]]*wireguard' || return 1
+    printf '%s' "$_o" | grep -qi "type:[[:space:]]*${_want}" || return 1
 
     _ip="$(printf '%s' "$_o" | sed -n 's/^[[:space:]]*address:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -n 1)"
     _desc="$(printf '%s' "$_o" | sed -n 's/^[[:space:]]*description:[[:space:]]*\(.*\)$/\1/p' | head -n 1 | tr '\t' ' ')"
@@ -285,45 +295,130 @@ parse_wg_text() {
     return 0
 }
 
+# probe one ndmc interface name; on success print: Name\tip\tdesc\tsec\tstate\tlink
+probe_ndmc_iface() {
+    _ndmc_name="$1"
+    _type_want="$2"
+
+    _out="$(ndmc_try "show interface $_ndmc_name")" || return 1
+    [ -n "$_out" ] || return 1
+
+    if [ "$NDMC_FORMAT" = "json" ]; then
+        _fields="$(parse_tun_json "$_out" "$_type_want")"
+    else
+        _fields="$(parse_tun_text "$_out" "$_type_want")"
+    fi
+    [ -n "$_fields" ] || return 1
+    printf '%s\t%s\n' "$_ndmc_name" "$_fields"
+    return 0
+}
+
 list_wg_interfaces() {
     _i=0
     while [ "$_i" -le "$MAX_WG_INDEX" ]; do
-        if _out="$(ndmc_try "show interface Wireguard$_i")" && [ -n "$_out" ]; then
-            if [ "$NDMC_FORMAT" = "json" ]; then
-                _fields="$(parse_wg_json "$_out")"
-            else
-                _fields="$(parse_wg_text "$_out")"
-            fi
-            [ -n "$_fields" ] && printf 'Wireguard%s\t%s\n' "$_i" "$_fields"
-        fi
+        probe_ndmc_iface "Wireguard$_i" "wireguard" || true
         _i=$((_i + 1))
     done
 }
 
+list_zt_interfaces() {
+    # Keenetic CLI: ZeroTier0, ZeroTier1, ... → Linux zt0, zt1, ...
+    _i=0
+    while [ "$_i" -le "$MAX_ZT_INDEX" ]; do
+        probe_ndmc_iface "ZeroTier$_i" "zerotier" || true
+        _i=$((_i + 1))
+    done
+
+    # Запасной путь: Linux ztN уже есть (Entware ZeroTier / другой клиент),
+    # а в ndmc интерфейса ZeroTierN нет. Добавляем ztN в список.
+    # security-level для таких записей не меняем (имя уже linux).
+    for _zt in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^zt[0-9]+$' || true); do
+        _n="${_zt#zt}"
+        # уже есть из ndmc?
+        if grep -qE "^(ZeroTier|Zerotier)${_n}	" "$TMP_LIST" 2>/dev/null; then
+            continue
+        fi
+        if grep -q "^${_zt}	" "$TMP_LIST" 2>/dev/null; then
+            continue
+        fi
+        _ip=$(ip -4 -o addr show dev "$_zt" 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1)
+        [ -n "$_ip" ] || _ip="-"
+        # name=ztN, ip, desc, sec=- (не трогаем), state=up/down, link=-
+        _state="up"
+        ip link show "$_zt" 2>/dev/null | grep -q 'state DOWN' && _state="down"
+        printf '%s	%s	%s	%s	%s	%s
+' "$_zt" "$_ip" "ZeroTier(linux)" "-" "$_state" "-"
+    done
+}
+
+# Объединённый список: сначала WG, потом ZeroTier
+list_tunnel_interfaces() {
+    list_wg_interfaces
+    list_zt_interfaces
+}
+
 get_linux_name() {
-    # Keenetic WireguardN normally maps to nwgN. We verify it exists.
-    n="${1#Wireguard}"
-    if ip link show "nwg$n" >/dev/null 2>&1; then
-        printf 'nwg%s\n' "$n"
-    else
-        printf '%s\n' "-"
-    fi
+    # WireguardN -> nwgN, ZeroTierN/ZerotierN -> ztN
+    case "$1" in
+        Wireguard*)
+            n="${1#Wireguard}"
+            if ip link show "nwg$n" >/dev/null 2>&1; then
+                printf 'nwg%s\n' "$n"
+            else
+                printf '%s\n' "-"
+            fi
+            ;;
+        ZeroTier*|Zerotier*)
+            n="${1#ZeroTier}"
+            n="${n#Zerotier}"
+            if ip link show "zt$n" >/dev/null 2>&1; then
+                printf 'zt%s\n' "$n"
+            elif ip link show "zt$n" >/dev/null 2>&1; then
+                printf 'zt%s\n' "$n"
+            else
+                # иногда индекс в Linux совпадает, даже если ndmc-имя другое
+                if ip link show zt0 >/dev/null 2>&1 && [ "$n" = "0" ]; then
+                    printf 'zt0\n'
+                else
+                    printf '%s\n' "-"
+                fi
+            fi
+            ;;
+        *)
+            # если передали уже linux-имя
+            if ip link show "$1" >/dev/null 2>&1; then
+                printf '%s\n' "$1"
+            else
+                printf '%s\n' "-"
+            fi
+            ;;
+    esac
+}
+
+iface_kind_label() {
+    case "$1" in
+        Wireguard*) printf 'WG' ;;
+        ZeroTier*|Zerotier*) printf 'ZT' ;;
+        *) printf '?' ;;
+    esac
 }
 
 show_wg_list() {
     say ""
-    say "Опрашиваю Keenetic CLI..."
-    list_wg_interfaces > "$TMP_LIST"
+    say "Опрашиваю Keenetic CLI (WireGuard + ZeroTier)..."
+    : > "$TMP_LIST"
+    list_tunnel_interfaces >> "$TMP_LIST"
 
     if [ ! -s "$TMP_LIST" ]; then
-        say "WireGuard-интерфейсы не найдены (Wireguard0-$MAX_WG_INDEX)."
+        say "Туннели не найдены (Wireguard0-$MAX_WG_INDEX, ZeroTier0-$MAX_ZT_INDEX)."
         return 1
     fi
 
     say ""
-    say "WireGuard:"
+    say "Туннели:"
     while IFS='	' read -r name ip desc sec state link; do
-        printf '  %-11s %-15s %-9s %s (%s/%s)\n' "$name" "$ip" "$sec" "$desc" "$state" "$link"
+        _k="$(iface_kind_label "$name")"
+        printf '  [%s] %-12s %-15s %-9s %s (%s/%s)\n' "$_k" "$name" "$ip" "$sec" "$desc" "$state" "$link"
     done < "$TMP_LIST"
     return 0
 }
@@ -331,16 +426,18 @@ show_wg_list() {
 # 0 — выбран интерфейс, 1 — отмена/неверный ввод, 2 — интерфейсов нет
 select_wg() {
     say ""
-    say "Опрашиваю Keenetic CLI..."
-    list_wg_interfaces > "$TMP_LIST"
+    say "Опрашиваю Keenetic CLI (WireGuard + ZeroTier)..."
+    : > "$TMP_LIST"
+    list_tunnel_interfaces >> "$TMP_LIST"
     [ -s "$TMP_LIST" ] || return 2
 
     say ""
-    say "Выберите WireGuard:"
+    say "Выберите туннель (WireGuard / ZeroTier):"
     say ""
     n=1
     while IFS='	' read -r name ip desc sec state link; do
-        printf '%s) %s — %s — %s (%s/%s)\n' "$n" "$name" "$ip" "$desc" "$state" "$link"
+        _k="$(iface_kind_label "$name")"
+        printf '%s) [%s] %s — %s — %s (%s/%s)\n' "$n" "$_k" "$name" "$ip" "$desc" "$state" "$link"
         n=$((n + 1))
     done < "$TMP_LIST"
 
@@ -486,9 +583,10 @@ configure_access() {
     case "$?" in
         1) return 0 ;;
         2) say ""
-           say "WireGuard-интерфейсы не найдены."
-           say "ndmc отвечает, но ни один Wireguard0-$MAX_WG_INDEX не вернул type: Wireguard."
-           say "Проверь вручную: ndmc -c \"show interface Wireguard0\""
+           say "Туннели не найдены (WireGuard / ZeroTier)."
+           say "Проверь: ndmc -c \"show interface Wireguard0\""
+           say "         ndmc -c \"show interface ZeroTier0\""
+           say "         ip link | grep -E 'nwg|zt'"
            return 1 ;;
     esac
 
@@ -498,7 +596,7 @@ configure_access() {
     }
 
     [ "$SEL_LINUX" != "-" ] || {
-        say "Не найден Linux-интерфейс $SEL_NAME -> ожидается nwgN."
+        say "Не найден Linux-интерфейс для $SEL_NAME (ожидается nwgN или ztN)."
         return 1
     }
 
@@ -534,16 +632,24 @@ configure_access() {
     say "[1/4] Добавляю $SEL_LINUX в AWG Manager (.server.interfaces)..."
     add_interface_to_awg "$SEL_LINUX" || return 1
 
-    say "[2/4] Устанавливаю $SEL_NAME = private..."
-    if ! set_security_level "$SEL_NAME" "private"; then
-        say "Откатываю изменение settings.json..."
-        if [ -f "$before" ] && cp -p "$before" "$AWG_SETTINGS"; then
-            say "settings.json возвращён к состоянию до запуска."
-        else
-            say "ВНИМАНИЕ: откат settings.json не удался, проверь $AWG_SETTINGS"
-        fi
-        return 1
-    fi
+    case "$SEL_NAME" in
+        zt[0-9]*|nwg[0-9]*)
+            # Уже linux-имя (например zt0 из ip link) — security-level в ndmc не трогаем
+            say "[2/4] security-level: пропуск (интерфейс $SEL_NAME без ndmc-имени)"
+            ;;
+        *)
+            say "[2/4] Устанавливаю $SEL_NAME = private..."
+            if ! set_security_level "$SEL_NAME" "private"; then
+                say "Откатываю изменение settings.json..."
+                if [ -f "$before" ] && cp -p "$before" "$AWG_SETTINGS"; then
+                    say "settings.json возвращён к состоянию до запуска."
+                else
+                    say "ВНИМАНИЕ: откат settings.json не удался, проверь $AWG_SETTINGS"
+                fi
+                return 1
+            fi
+            ;;
+    esac
 
     say "[3/4] Сохраняю конфигурацию Keenetic..."
     save_keenetic || say "ПРЕДУПРЕЖДЕНИЕ: конфигурация не сохранена, изменения пропадут после перезагрузки."
@@ -681,10 +787,10 @@ menu() {
     while :; do
         say ""
         say "========================================"
-        say " AWG Manager — доступ через WireGuard"
+        say " AWG Manager — доступ через туннель"
         say "========================================"
         say ""
-        say "1. Настроить доступ через туннель"
+        say "1. Настроить доступ через туннель (WG / ZeroTier)"
         say "2. Вернуть ВСЁ как было"
         say "3. Показать текущую конфигурацию"
         say "0. Выход"
