@@ -282,51 +282,6 @@ jobs:
             fi
           fi
 
-      # Только тег compressed: выкидываем всё, чего нет на зеркале.
-      # Топики awgm-* / sb-* НЕ удаляем и не трогаем.
-      - name: Prune compressed to latest only
-        if: always() && steps.build.outcome == 'success'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          OUR_REPO="${{ github.repository }}"
-          TAG="compressed"
-          [ -f wanted.txt ] || { echo "no wanted.txt"; exit 0; }
-
-          echo "Крайние версии (оставить в $TAG):"
-          sed 's/^/  /' wanted.txt
-
-          JSON=$(curl -sL \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${OUR_REPO}/releases/tags/${TAG}" || true)
-
-          if ! echo "$JSON" | jq -e '.id' >/dev/null 2>&1; then
-            echo "Релиза $TAG ещё нет"
-            exit 0
-          fi
-
-          echo ""
-          echo "Очистка ассетов только в теге $TAG (другие релизы не трогаем):"
-          echo "$JSON" | jq -c '.assets[]?' | while read -r row; do
-            name=$(echo "$row" | jq -r '.name')
-            aid=$(echo "$row" | jq -r '.id')
-            case "$name" in
-              awg-manager_*_compressed.ipk|singbox-*_compressed) ;;
-              *) echo "  keep (other): $name"; continue ;;
-            esac
-            if grep -qxF "$name" wanted.txt; then
-              echo "  keep latest: $name"
-            else
-              echo "  DELETE from $TAG: $name"
-              curl -sL -o /dev/null -w "    HTTP %{http_code}\n" -X DELETE \
-                -H "Authorization: Bearer $GITHUB_TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/repos/${OUR_REPO}/releases/assets/${aid}" || true
-            fi
-          done
-
       - name: Publish AWG-M topic (архив, навсегда)
         if: steps.build.outputs.skip_awg != 'true' && steps.build.outputs.awg_tag != ''
         uses: softprops/action-gh-release@v2
@@ -367,3 +322,48 @@ jobs:
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # После успешной публикации: в compressed оставляем только крайние версии.
+      # Раньше prune шёл ДО upload → удалял старый AWG, а новый не заливал (skip) → в Latest оставался только sing-box.
+      - name: Prune compressed to latest only
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          OUR_REPO="${{ github.repository }}"
+          TAG="compressed"
+          [ -f wanted.txt ] || { echo "no wanted.txt"; exit 0; }
+
+          echo "Крайние версии (оставить в $TAG):"
+          sed 's/^/  /' wanted.txt
+
+          JSON=$(curl -sL \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OUR_REPO}/releases/tags/${TAG}" || true)
+
+          if ! echo "$JSON" | jq -e '.id' >/dev/null 2>&1; then
+            echo "Релиза $TAG ещё нет"
+            exit 0
+          fi
+
+          echo ""
+          echo "Очистка ассетов только в теге $TAG (другие релизы не трогаем):"
+          echo "$JSON" | jq -c '.assets[]?' | while read -r row; do
+            name=$(echo "$row" | jq -r '.name')
+            aid=$(echo "$row" | jq -r '.id')
+            case "$name" in
+              awg-manager_*_compressed.ipk|singbox-*_compressed) ;;
+              *) echo "  keep (other): $name"; continue ;;
+            esac
+            if grep -qxF "$name" wanted.txt; then
+              echo "  keep latest: $name"
+            else
+              echo "  DELETE from $TAG: $name"
+              curl -sL -o /dev/null -w "    HTTP %{http_code}\n" -X DELETE \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${OUR_REPO}/releases/assets/${aid}" || true
+            fi
+          done
