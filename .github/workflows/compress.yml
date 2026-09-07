@@ -2,7 +2,7 @@ name: Compress AWG + sing-box
 
 on:
   schedule:
-    - cron: "0 */12 * * *"
+    - cron: "0 */8 * * *"
   workflow_dispatch:
 
 permissions:
@@ -250,11 +250,36 @@ jobs:
             fi
           done < /tmp/wanted_src.txt
 
-          ls -lh out/awg out/sb 2>/dev/null || true
-          if ! ls out/awg/* out/sb/* >/dev/null 2>&1; then
+          echo ""
+          echo "== Результат сборки =="
+          ls -lh out/awg/ out/sb/ out/ 2>/dev/null || true
+
+          # ВАЖНО: проверять каталоги по отдельности.
+          # Раньше: ls out/awg/* out/sb/* — если sb пуст, ls падал и выставлял skip=true,
+          # хотя AWG уже собран → релизы не публиковались.
+          HAS_AWG=0
+          HAS_SB=0
+          ls out/awg/* >/dev/null 2>&1 && HAS_AWG=1
+          ls out/sb/* >/dev/null 2>&1 && HAS_SB=1
+          echo "  HAS_AWG=$HAS_AWG HAS_SB=$HAS_SB"
+
+          if [ "$HAS_AWG" -eq 0 ] && [ "$HAS_SB" -eq 0 ]; then
+            echo ">>> Нет собранных файлов — публикация отменена"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "skip_awg=true" >> "$GITHUB_OUTPUT"
             echo "skip_sb=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            if [ "$HAS_AWG" -eq 1 ]; then
+              echo "skip_awg=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "skip_awg=true" >> "$GITHUB_OUTPUT"
+            fi
+            if [ "$HAS_SB" -eq 1 ]; then
+              echo "skip_sb=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "skip_sb=true" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       # Только тег compressed: выкидываем всё, чего нет на зеркале.
@@ -310,6 +335,7 @@ jobs:
           name: ${{ steps.build.outputs.awg_name }}
           body_path: release-body-awg.md
           files: out/awg/*
+          fail_on_unmatched_files: false
           make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -322,6 +348,7 @@ jobs:
           name: ${{ steps.build.outputs.sb_name }}
           body_path: release-body-sb.md
           files: out/sb/*
+          fail_on_unmatched_files: false
           make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -336,6 +363,7 @@ jobs:
           files: |
             out/*.ipk
             out/singbox-*_compressed
+          fail_on_unmatched_files: false
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
