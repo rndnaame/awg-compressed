@@ -2,7 +2,7 @@ name: Compress AWG + sing-box
 
 on:
   schedule:
-    - cron: "0 */8 * * *"
+    - cron: "0 */12 * * *"
   workflow_dispatch:
 
 permissions:
@@ -80,7 +80,15 @@ jobs:
             [ -n "$v" ] && AWG_VER="$v"
           done
 
-          SB_VER=$(curl -sL "$MIRROR/singbox/" | grep -oE 'href="1\.[^"/]+/"' | sed 's/href="//;s|/"||' | sort -V | tail -1 || true)
+          # sort -V: 1.14.0-rc.1-awgm.15 > 1.14.0-awgm.16 — неверно для форка.
+          # Берём версию с максимальным N в суффиксе -awgm.N.
+          SB_VER=$(
+            curl -sL "$MIRROR/singbox/"               | grep -oE 'href="1\.[^"/]+/"'               | sed 's/href="//;s|/"||'               | while read -r ver; do
+                  n=$(echo "$ver" | sed -n 's/.*awgm\.\([0-9][0-9]*\).*/\1/p')
+                  [ -n "$n" ] || n=0
+                  printf '%s %s\n' "$n" "$ver"
+                done               | sort -n               | tail -1               | awk '{print $2}'
+          )
           echo "  sing-box: ${SB_VER:-none}"
           if [ -n "$SB_VER" ]; then
             for f in $(curl -sL "$MIRROR/singbox/$SB_VER/" | grep -oE 'singbox-[^"<> ]+' | grep -v sha256 | grep -E 'aarch64|mips' | sort -u); do
@@ -176,18 +184,44 @@ jobs:
           } > release-body-sb.md
 
           {
-            echo "### Latest (`compressed`)"
-            echo ""
-            echo "В этом релизе **только крайние** версии с зеркала. Старые файлы отсюда удаляются."
+            echo "В этом релизе только крайние версии, сжатые UPX."
             echo ""
             [ -n "$AWG_VER" ] && echo "- awg-manager: **v${AWG_VER}** → топик \`${AWG_TAG}\`"
             [ -n "$SB_VER" ] && echo "- sing-box: **${SB_VER}** → топик \`${SB_TAG}\`"
             echo ""
-            echo "История версий хранится в отдельных релизах \`awgm-*\` и \`sb-*\` (не трогаем)."
+            echo "История версий хранится в отдельных релизах \`awgm-*\` и \`sb-*\`."
             echo ""
             echo '```sh'
             echo "curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
             echo '```'
+
+            # Changelog с официального релиза awg-manager (под спойлером)
+            if [ -n "$AWG_VER" ]; then
+              CL_JSON=$(curl -sL \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/hoaxisr/awg-manager/releases/tags/v${AWG_VER}" || true)
+              CL_BODY=$(echo "$CL_JSON" | jq -r '.body // empty' 2>/dev/null || true)
+              if [ -n "$CL_BODY" ] && [ "$CL_BODY" != "null" ]; then
+                echo ""
+                echo "<details>"
+                echo "<summary>Changelog awg-manager v${AWG_VER} (официальный)</summary>"
+                echo ""
+                echo "$CL_BODY"
+                echo ""
+                echo "— Источник: https://github.com/hoaxisr/awg-manager/releases/tag/v${AWG_VER}"
+                echo ""
+                echo "</details>"
+              else
+                echo ""
+                echo "<details>"
+                echo "<summary>Changelog awg-manager v${AWG_VER}</summary>"
+                echo ""
+                echo "Не удалось загрузить notes. Смотрите: https://github.com/hoaxisr/awg-manager/releases/tag/v${AWG_VER}"
+                echo ""
+                echo "</details>"
+              fi
+            fi
           } > release-body-rolling.md
 
           if [ "$NEED" -eq 0 ]; then
