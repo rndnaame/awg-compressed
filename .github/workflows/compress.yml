@@ -39,7 +39,7 @@ jobs:
             echo "sb_tag="
             echo "awg_name="
             echo "sb_name="
-            echo "rolling_name=Compressed AWG + sing-box (latest)"
+            echo "rolling_name=Latest"
           } >> "$GITHUB_OUTPUT"
 
           upx_fast() {
@@ -105,15 +105,8 @@ jobs:
             SB_NAME="${SB_VER} (sing-box UPX)"
             SB_TAG=$(echo "sb-${SB_VER}" | sed 's/[^a-zA-Z0-9._-]/-/g')
           fi
-          ROLLING_NAME="Latest UPX"
-          [ -n "$AWG_VER" ] && ROLLING_NAME="v${AWG_VER} (AWG-M UPX)"
-          if [ -n "$SB_VER" ]; then
-            if [ "$ROLLING_NAME" = "Latest UPX" ]; then
-              ROLLING_NAME="${SB_VER} (sing-box UPX)"
-            else
-              ROLLING_NAME="${ROLLING_NAME} · ${SB_VER} (sing-box UPX)"
-            fi
-          fi
+          # Имя rolling-релиза всегда короткое; версии — в body
+          ROLLING_NAME="Latest"
 
           echo "awg_ver=$AWG_VER" >> "$GITHUB_OUTPUT"
           echo "sb_ver=$SB_VER" >> "$GITHUB_OUTPUT"
@@ -183,7 +176,7 @@ jobs:
           } > release-body-sb.md
 
           {
-            echo "### Latest only (\`${ROLLING_TAG}\`)"
+            echo "### Latest (`compressed`)"
             echo ""
             echo "В этом релизе **только крайние** версии с зеркала. Старые файлы отсюда удаляются."
             echo ""
