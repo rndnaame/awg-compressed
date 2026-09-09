@@ -8,7 +8,7 @@ UPX-сжатые сборки **awg-manager** и **sing-box** для Keenetic + 
 | Установщик | [`install-compressed.sh`](https://github.com/rndnaame/awg-compressed/blob/main/install-compressed.sh) |
 | Исходники пакетов | [hoaxisr/awg-manager](https://github.com/hoaxisr/awg-manager), [hoaxisr/amnezia-box](https://github.com/hoaxisr/amnezia-box), зеркало [repo.hoaxisr.ru](http://repo.hoaxisr.ru) |
 
-GitHub Actions раз в ~12 часов проверяет зеркало и публикует:
+GitHub Actions раз в ~8 часов проверяет зеркало и публикует:
 
 | Релиз | Пример | Поведение |
 |-------|--------|-----------|
@@ -38,24 +38,24 @@ wget -qO- https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install
 
 ```
 Что сделать?
-  [1] Установить awg-manager (UPX-версия)          ← по умолчанию
-  [2] Установить sing-box (UPX-версия)
-  [3] Установить awg-manager + sing-box (UPX-версия)
-  [4] Установка awg-manager (с выбором версии)
+  [1] Установка awg-manager (с выбором версии)     ← по умолчанию
+  [2] Установка awg-manager (UPX-версия)
+  [3] Установка sing-box (UPX-версия)
+  [4] Установка awg-manager + sing-box (UPX-версия)
   [5] Настроить доступ через туннель
   [0] Отмена
 ```
 
 | Пункт | Что делает |
 |-------|------------|
-| **1** | Сжатый IPK из release `compressed` этого репозитория |
-| **2** | Сжатый бинарник sing-box из того же release |
-| **3** | Пункты 1 + 2 |
-| **4** | **Официальный** (несжатый) IPK с GitHub/зеркала, можно выбрать версию из списка |
-| **5** | Скрипт доступа AWG Manager через WireGuard-интерфейс Keenetic |
+| **1** | **Официальный** (несжатый) IPK с GitHub/зеркала, можно выбрать версию из списка |
+| **2** | Сжатый IPK awg-manager из release `compressed` |
+| **3** | Сжатый бинарник sing-box из того же release |
+| **4** | Пункты 2 + 3 (awg-manager + sing-box UPX) |
+| **5** | Скрипт доступа awg-manager через туннель (WG / ZeroTier) |
 
-Для пунктов **1–3** скрипт сравнивает версии: предложит обновить, переустановить или пропустить.  
-Для **4**: `Номер (1–N) или версия (Enter = последняя, 0 = выход)`.
+Для пункта **1**: `Номер (1–N) или версия (Enter = последняя, 0 = выход)`.  
+Для пунктов **2–4** скрипт сравнивает версии: предложит обновить, переустановить или пропустить.
 
 ---
 
@@ -117,7 +117,7 @@ DL_IFACES="nwg0 opkgtun10" DL_TIMEOUT=60 \
 INSTALL_AWG=1 INSTALL_SB=0 sh -c "$(curl -sL https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh)"
 ```
 
-Пункты **4** и **5** в неинтерактивном режиме не вызываются — только через меню.
+Пункты **1** (выбор версии) и **5** (туннель) в неинтерактивном режиме не вызываются — только через меню.
 
 ---
 
