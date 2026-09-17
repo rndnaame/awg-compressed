@@ -422,9 +422,10 @@ run_menu() {
   echo "  [3] Установка sing-box (UPX-версия)"
   echo "  [4] Установка awg-manager + sing-box (UPX-версия)"
   echo "  [5] Настроить доступ через туннель"
+  echo "  [6] Установка sing-box (UPX с выбором версии)"
   echo "  [0] Отмена"
   echo ""
-  choice=$(ask "Выбор [0-5], по умолчанию 1: " "1")
+  choice=$(ask "Выбор [0-6], по умолчанию 1: " "1")
   case "$choice" in
     1)
       install_awg_version_select
@@ -435,6 +436,10 @@ run_menu() {
     4) DO_AWG=1; DO_SB=1 ;;
     5)
       run_tunnel_access
+      exit $?
+      ;;
+    6)
+      install_sb_version_select
       exit $?
       ;;
     0|n|N|q|Q) echo "Отменено."; exit 0 ;;
@@ -679,6 +684,120 @@ install_awg_version_select() {
   fi
   rm -f "./$ipk_name"
   echo "Обновление позже: opkg update && opkg upgrade awg-manager"
+  return 0
+}
+
+# Пункт [6]: UPX sing-box с выбором версии (из топиков sb-*)
+install_sb_version_select() {
+  echo ""
+  echo "=== Установка sing-box (UPX с выбором версии) ==="
+  echo ""
+
+  # ARCH уже определён в detect_arch: aarch64 / mipsel / mips
+  case "$ARCH" in
+    aarch64) SB_ARCH_SUFFIX="aarch64-3.10" ;;
+    mipsel)  SB_ARCH_SUFFIX="mipsel-3.4" ;;
+    mips)    SB_ARCH_SUFFIX="mips-3.4" ;;
+    *)
+      echo "❌ Неизвестная архитектура: $ARCH"
+      return 1
+      ;;
+  esac
+  echo "✅ Архитектура: $A → $SB_ARCH_SUFFIX"
+
+  echo "→ Список релизов sing-box (UPX) из rndnaame/awg-compressed..."
+  API_JSON=$(fetch_text "https://api.github.com/repos/${REPO}/releases?per_page=40" || true)
+  VERSIONS=$(echo "$API_JSON" | sed -n 's/.*"tag_name": "\(sb-[^"]*\)".*/\1/p' | head -15)
+
+  if [ -z "$VERSIONS" ]; then
+    echo "   API пуст, пробуем HTML..."
+    HTML=$(fetch_text "https://github.com/${REPO}/releases" || true)
+    VERSIONS=$(echo "$HTML" | grep -oE '/rndnaame/awg-compressed/releases/tag/sb-[^"<> ]+' | sed 's|.*/||' | sort -u | sort -Vr | head -15)
+  fi
+
+  if [ -z "$VERSIONS" ]; then
+    echo "❌ Не удалось получить список версий sing-box"
+    return 1
+  fi
+
+  echo ""
+  echo "🔢 Доступные версии (новые сверху):"
+  i=1
+  echo "$VERSIONS" > /tmp/sb-ver-list.$$
+  while read -r v; do
+    [ -n "$v" ] || continue
+    # tag: sb-1.14.0-awgm.16 → показываем 1.14.0-awgm.16
+    disp=${v#sb-}
+    echo "   $i) $disp"
+    i=$((i + 1))
+  done < /tmp/sb-ver-list.$$
+  max=$((i - 1))
+
+  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = выход): " "")
+  if [ -z "$c" ]; then
+    ver_tag=$(head -1 /tmp/sb-ver-list.$$)
+  elif [ "$c" = "0" ]; then
+    echo "Отменено."
+    rm -f /tmp/sb-ver-list.$$
+    return 0
+  elif echo "$c" | grep -qE '^[0-9]+$'; then
+    if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
+      ver_tag=$(sed -n "${c}p" /tmp/sb-ver-list.$$)
+    else
+      echo "❌ Номер вне диапазона 1-$max (0 = выход)"
+      rm -f /tmp/sb-ver-list.$$
+      return 1
+    fi
+  else
+    # пользователь ввёл версию без sb-
+    case "$c" in
+      sb-*) ver_tag="$c" ;;
+      *)    ver_tag="sb-$c" ;;
+    esac
+  fi
+  rm -f /tmp/sb-ver-list.$$
+
+  ver_disp=${ver_tag#sb-}
+  sb_name="singbox-${ver_disp}-${SB_ARCH_SUFFIX}_compressed"
+  url="https://github.com/${REPO}/releases/download/${ver_tag}/${sb_name}"
+
+  echo ""
+  echo "📥 Скачивание $ver_disp ($sb_name)..."
+  mkdir -p "$TMP"
+  cd "$TMP" || return 1
+  rm -f "$sb_name"
+
+  if ! download_file "$url" "$sb_name" 100000; then
+    echo "❌ Ошибка скачивания $ver_disp"
+    echo "   URL: $url"
+    return 1
+  fi
+
+  mkdir -p "$SINGBOX_DIR"
+
+  # бэкап старого, если есть
+  if [ -x "$SINGBOX_DIR/sing-box" ]; then
+    do_bak=0
+    if [ -n "$BACKUP_SB" ]; then
+      case "$BACKUP_SB" in
+        1|y|Y|yes|YES) do_bak=1 ;;
+      esac
+    else
+      [ "$(yes_no "Сохранить старый sing-box как sing-box.bak? [y/N]: " "n")" = "1" ] && do_bak=1
+    fi
+    if [ "$do_bak" = "1" ]; then
+      cp "$SINGBOX_DIR/sing-box" "$SINGBOX_DIR/sing-box.bak" 2>/dev/null || true
+      echo "   💾 бэкап → $SINGBOX_DIR/sing-box.bak"
+    fi
+  fi
+
+  cp "$sb_name" "$SINGBOX_DIR/sing-box"
+  chmod +x "$SINGBOX_DIR/sing-box"
+  echo "✅ sing-box $ver_disp → $SINGBOX_DIR/sing-box"
+  "$SINGBOX_DIR/sing-box" version 2>/dev/null | head -1 || true
+
+  rm -f "$sb_name"
+  echo "🎉 Установлен sing-box $ver_disp (UPX)"
   return 0
 }
 
