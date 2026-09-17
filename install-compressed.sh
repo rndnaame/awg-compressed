@@ -198,7 +198,8 @@ download_file() {
 
 fetch_text() {
   url="$1"
-  try_secs=20
+  # Короче таймаут: API/HTML небольшие, меню не должно ждать по 20с на каждый iface
+  try_secs="${FETCH_TEXT_TIMEOUT:-12}"
   ifaces="${DL_IFACES:-$DEFAULT_IFACES}"
 
   HAS_CURL=0
@@ -417,13 +418,19 @@ run_menu() {
   fi
 
   echo "Что сделать?"
-  echo "  [1] Установка awg-manager (с выбором версии)"
-  echo "  [2] Установка awg-manager (UPX-версия)"
-  echo "  [3] Установка sing-box (UPX-версия)"
-  echo "  [4] Установка awg-manager + sing-box (UPX-версия)"
-  echo "  [5] Настроить доступ через туннель"
-  echo "  [6] Установка sing-box (UPX с выбором версии)"
-  echo "  [0] Отмена"
+  echo ""
+  echo "  awg-manager"
+  echo "    [1]  официальный  · выбор версии"
+  echo "    [2]  UPX          · последняя"
+  echo ""
+  echo "  sing-box"
+  echo "    [3]  UPX          · последняя"
+  echo "    [4]  UPX          · выбор версии"
+  echo ""
+  echo "  вместе / прочее"
+  echo "    [5]  оба UPX      · awg-manager + sing-box"
+  echo "    [6]  Настроить доступ через туннель"
+  echo "    [0]  отмена"
   echo ""
   choice=$(ask "Выбор [0-6], по умолчанию 1: " "1")
   case "$choice" in
@@ -433,13 +440,13 @@ run_menu() {
       ;;
     2) DO_AWG=1; DO_SB=0 ;;
     3) DO_AWG=0; DO_SB=1 ;;
-    4) DO_AWG=1; DO_SB=1 ;;
-    5)
-      run_tunnel_access
+    4)
+      install_sb_version_select
       exit $?
       ;;
+    5) DO_AWG=1; DO_SB=1 ;;
     6)
-      install_sb_version_select
+      run_tunnel_access
       exit $?
       ;;
     0|n|N|q|Q) echo "Отменено."; exit 0 ;;
@@ -687,7 +694,7 @@ install_awg_version_select() {
   return 0
 }
 
-# Пункт [6]: UPX sing-box с выбором версии (из топиков sb-*)
+# Пункт [4]: UPX sing-box с выбором версии (из топиков sb-*)
 install_sb_version_select() {
   echo ""
   echo "=== Установка sing-box (UPX с выбором версии) ==="
@@ -801,7 +808,7 @@ install_sb_version_select() {
   return 0
 }
 
-# Пункт [5]
+# Пункт [6]
 run_tunnel_access() {
   echo ""
   echo "=== Настройка доступа через туннель ==="
@@ -849,9 +856,19 @@ main() {
   echo ""
   detect_installed
   show_installed
+
+  # Меню сразу — без ожидания GitHub.
+  # Список файлов из release compressed нужен только для пунктов 2/3/4
+  # (и неинтерактивного режима INSTALL_AWG / INSTALL_SB).
+  run_menu
+
+  if [ "$DO_AWG" != "1" ] && [ "$DO_SB" != "1" ]; then
+    echo "Нечего устанавливать. Выход."
+    exit 0
+  fi
+
   fetch_release_assets
   show_available
-  run_menu
   decide_awg
   decide_sb
 
