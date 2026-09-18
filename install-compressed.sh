@@ -434,45 +434,63 @@ run_menu() {
     return 0
   fi
 
-  echo "Что сделать?"
-  echo ""
-  echo "  awg-manager"
-  echo "    [1]  официальный  · выбор версии"
-  echo "    [2]  UPX          · выбор версии"
-  echo ""
-  echo "  sing-box"
-  echo "    [3]  официальный  · выбор версии"
-  echo "    [4]  UPX          · выбор версии"
-  echo ""
-  echo "  прочее"
-  echo "    [5]  Настроить доступ через туннель"
-  echo "    [0]  отмена"
-  echo ""
-  choice=$(ask "Выбор [0-5], по умолчанию 1: " "1")
-  case "$choice" in
-    1)
-      install_awg_version_select
-      exit $?
-      ;;
-    2)
-      install_awg_upx_version_select
-      exit $?
-      ;;
-    3)
-      install_sb_official_version_select
-      exit $?
-      ;;
-    4)
-      install_sb_version_select
-      exit $?
-      ;;
-    5)
-      run_tunnel_access
-      exit $?
-      ;;
-    0|n|N|q|Q) echo "Отменено."; exit 0 ;;
-    *) echo "Неверный выбор."; exit 1 ;;
-  esac
+  # Цикл главного меню: 0 — полный выход; в подменю 0 — возврат сюда
+  while true; do
+    echo "Что сделать?"
+    echo ""
+    echo "  awg-manager"
+    echo "    [1]  официальный  · выбор версии"
+    echo "    [2]  UPX          · выбор версии"
+    echo ""
+    echo "  sing-box"
+    echo "    [3]  официальный  · выбор версии"
+    echo "    [4]  UPX          · выбор версии"
+    echo ""
+    echo "  прочее"
+    echo "    [5]  Настроить доступ через туннель"
+    echo "    [0]  выход"
+    echo ""
+    choice=$(ask "Выбор [0-5], по умолчанию 1: " "1")
+    case "$choice" in
+      1)
+        # set -e: вызов в if, иначе return 2 (в меню) роняет скрипт
+        if install_awg_version_select; then
+          exit 0
+        fi
+        echo ""
+        ;;
+      2)
+        if install_awg_upx_version_select; then
+          exit 0
+        fi
+        echo ""
+        ;;
+      3)
+        if install_sb_official_version_select; then
+          exit 0
+        fi
+        echo ""
+        ;;
+      4)
+        if install_sb_version_select; then
+          exit 0
+        fi
+        echo ""
+        ;;
+      5)
+        run_tunnel_access || true
+        echo ""
+        ;;
+      0|n|N|q|Q)
+        echo "Выход."
+        exit 0
+        ;;
+      *)
+        echo "Неверный выбор."
+        echo ""
+        ;;
+    esac
+  done
 }
 
 decide_awg() {
@@ -669,18 +687,18 @@ install_awg_version_select() {
   done < /tmp/awg-ver-list.$$
   max=$((i - 1))
 
-  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = выход): " "")
+  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
   if [ -z "$c" ]; then
     ver=$(head -1 /tmp/awg-ver-list.$$)
   elif [ "$c" = "0" ]; then
-    echo "Отменено."
+    echo "→ главное меню"
     rm -f /tmp/awg-ver-list.$$
-    return 0
+    return 2
   elif echo "$c" | grep -qE '^[0-9]+$'; then
     if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
       ver=$(sed -n "${c}p" /tmp/awg-ver-list.$$)
     else
-      echo "❌ Номер вне диапазона 1-$max (0 = выход)"
+      echo "❌ Номер вне диапазона 1-$max (0 = в меню)"
       rm -f /tmp/awg-ver-list.$$
       return 1
     fi
@@ -760,18 +778,18 @@ install_awg_upx_version_select() {
   done < /tmp/awgm-upx-list.$$
   max=$((i - 1))
 
-  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = выход): " "")
+  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
   if [ -z "$c" ]; then
     ver_tag=$(head -1 /tmp/awgm-upx-list.$$)
   elif [ "$c" = "0" ]; then
-    echo "Отменено."
+    echo "→ главное меню"
     rm -f /tmp/awgm-upx-list.$$
-    return 0
+    return 2
   elif echo "$c" | grep -qE '^[0-9]+$'; then
     if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
       ver_tag=$(sed -n "${c}p" /tmp/awgm-upx-list.$$)
     else
-      echo "❌ Номер вне диапазона 1-$max (0 = выход)"
+      echo "❌ Номер вне диапазона 1-$max (0 = в меню)"
       rm -f /tmp/awgm-upx-list.$$
       return 1
     fi
@@ -854,18 +872,18 @@ install_sb_official_version_select() {
   done < /tmp/sb-off-list.$$
   max=$((i - 1))
 
-  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = выход): " "")
+  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
   if [ -z "$c" ]; then
     ver_tag=$(head -1 /tmp/sb-off-list.$$)
   elif [ "$c" = "0" ]; then
-    echo "Отменено."
+    echo "→ главное меню"
     rm -f /tmp/sb-off-list.$$
-    return 0
+    return 2
   elif echo "$c" | grep -qE '^[0-9]+$'; then
     if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
       ver_tag=$(sed -n "${c}p" /tmp/sb-off-list.$$)
     else
-      echo "❌ Номер вне диапазона 1-$max (0 = выход)"
+      echo "❌ Номер вне диапазона 1-$max (0 = в меню)"
       rm -f /tmp/sb-off-list.$$
       return 1
     fi
@@ -964,18 +982,18 @@ install_sb_version_select() {
   done < /tmp/sb-ver-list.$$
   max=$((i - 1))
 
-  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = выход): " "")
+  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
   if [ -z "$c" ]; then
     ver_tag=$(head -1 /tmp/sb-ver-list.$$)
   elif [ "$c" = "0" ]; then
-    echo "Отменено."
+    echo "→ главное меню"
     rm -f /tmp/sb-ver-list.$$
-    return 0
+    return 2
   elif echo "$c" | grep -qE '^[0-9]+$'; then
     if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
       ver_tag=$(sed -n "${c}p" /tmp/sb-ver-list.$$)
     else
-      echo "❌ Номер вне диапазона 1-$max (0 = выход)"
+      echo "❌ Номер вне диапазона 1-$max (0 = в меню)"
       rm -f /tmp/sb-ver-list.$$
       return 1
     fi
