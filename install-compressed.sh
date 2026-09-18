@@ -296,13 +296,22 @@ detect_installed() {
 
   CUR_SB_RAW=""
   CUR_SB_VER=""
-  if [ -x "$SINGBOX_DIR/sing-box" ]; then
-    CUR_SB_RAW=$("$SINGBOX_DIR/sing-box" version 2>/dev/null | head -1 || true)
-  elif command -v sing-box >/dev/null 2>&1; then
-    CUR_SB_RAW=$(sing-box version 2>/dev/null | head -1 || true)
+  # Быстрый путь: meta.json (не запускаем бинарник)
+  _meta="$SINGBOX_DIR/sing-box.meta.json"
+  if [ -f "$_meta" ]; then
+    CUR_SB_VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_meta" | head -1)
+    [ -n "$CUR_SB_VER" ] && CUR_SB_RAW="$CUR_SB_VER"
   fi
-  if [ -n "$CUR_SB_RAW" ]; then
-    CUR_SB_VER=$(echo "$CUR_SB_RAW" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^[:space:]]*' | head -1 || true)
+  # Fallback: запуск sing-box version
+  if [ -z "$CUR_SB_VER" ]; then
+    if [ -x "$SINGBOX_DIR/sing-box" ]; then
+      CUR_SB_RAW=$("$SINGBOX_DIR/sing-box" version 2>/dev/null | head -1 || true)
+    elif command -v sing-box >/dev/null 2>&1; then
+      CUR_SB_RAW=$(sing-box version 2>/dev/null | head -1 || true)
+    fi
+    if [ -n "$CUR_SB_RAW" ]; then
+      CUR_SB_VER=$(echo "$CUR_SB_RAW" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^[:space:]]*' | head -1 || true)
+    fi
   fi
 }
 
@@ -323,6 +332,14 @@ show_installed() {
     echo "   sing-box    : не найден"
   fi
   echo ""
+}
+
+# Записать версию в meta.json (для быстрого чтения в меню)
+write_sb_meta() {
+  _ver="$1"
+  [ -n "$_ver" ] || return 0
+  mkdir -p "$SINGBOX_DIR" 2>/dev/null || true
+  printf '{"version":"%s"}\n' "$_ver" > "$SINGBOX_DIR/sing-box.meta.json" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -421,31 +438,35 @@ run_menu() {
   echo ""
   echo "  awg-manager"
   echo "    [1]  официальный  · выбор версии"
-  echo "    [2]  UPX          · последняя"
+  echo "    [2]  UPX          · выбор версии"
   echo ""
   echo "  sing-box"
-  echo "    [3]  UPX          · последняя"
+  echo "    [3]  официальный  · выбор версии"
   echo "    [4]  UPX          · выбор версии"
   echo ""
-  echo "  вместе / прочее"
-  echo "    [5]  оба UPX      · awg-manager + sing-box"
-  echo "    [6]  Настроить доступ через туннель"
+  echo "  прочее"
+  echo "    [5]  Настроить доступ через туннель"
   echo "    [0]  отмена"
   echo ""
-  choice=$(ask "Выбор [0-6], по умолчанию 1: " "1")
+  choice=$(ask "Выбор [0-5], по умолчанию 1: " "1")
   case "$choice" in
     1)
       install_awg_version_select
       exit $?
       ;;
-    2) DO_AWG=1; DO_SB=0 ;;
-    3) DO_AWG=0; DO_SB=1 ;;
+    2)
+      install_awg_upx_version_select
+      exit $?
+      ;;
+    3)
+      install_sb_official_version_select
+      exit $?
+      ;;
     4)
       install_sb_version_select
       exit $?
       ;;
-    5) DO_AWG=1; DO_SB=1 ;;
-    6)
+    5)
       run_tunnel_access
       exit $?
       ;;
@@ -595,14 +616,19 @@ install_sb_upx() {
 
   cp "$SB_NAME" "$SINGBOX_DIR/sing-box"
   chmod +x "$SINGBOX_DIR/sing-box"
+  [ -n "$NEW_SB" ] && write_sb_meta "$NEW_SB"
   echo "✅ sing-box ($SB_MODE) → $SINGBOX_DIR/sing-box"
-  "$SINGBOX_DIR/sing-box" version 2>/dev/null | head -1 || true
+  if [ -n "$NEW_SB" ]; then
+    echo "   version: $NEW_SB"
+  else
+    "$SINGBOX_DIR/sing-box" version 2>/dev/null | head -1 || true
+  fi
 }
 
 # Пункт [1]: официальный IPK с выбором версии
 install_awg_version_select() {
   echo ""
-  echo "=== Установка awg-manager (выбор версии) ==="
+  echo "=== Установка awg-manager (официальный · выбор версии) ==="
   echo ""
 
   S="$ARCH_SUFFIX"
@@ -694,10 +720,208 @@ install_awg_version_select() {
   return 0
 }
 
+# Пункт [2]: UPX awg-manager с выбором версии (из топиков awgm-*)
+install_awg_upx_version_select() {
+  echo ""
+  echo "=== Установка awg-manager (UPX · выбор версии) ==="
+  echo ""
+
+  S="$ARCH_SUFFIX"
+  if [ -z "$S" ]; then
+    echo "❌ Неизвестная архитектура: $ARCH"
+    return 1
+  fi
+  echo "✅ Архитектура: $A → $S"
+
+  echo "→ Список релизов awg-manager (UPX) из ${REPO}..."
+  API_JSON=$(fetch_text "https://api.github.com/repos/${REPO}/releases?per_page=40" || true)
+  VERSIONS=$(echo "$API_JSON" | sed -n 's/.*"tag_name": "\(awgm-[^"]*\)".*/\1/p' | head -15)
+
+  if [ -z "$VERSIONS" ]; then
+    echo "   API пуст, пробуем HTML..."
+    HTML=$(fetch_text "https://github.com/${REPO}/releases" || true)
+    VERSIONS=$(echo "$HTML" | grep -oE "/${REPO}/releases/tag/awgm-[^\"<> ]+" | sed 's|.*/||' | sort -u | sort -Vr | head -15)
+  fi
+
+  if [ -z "$VERSIONS" ]; then
+    echo "❌ Не удалось получить список версий awg-manager UPX"
+    return 1
+  fi
+
+  echo ""
+  echo "🔢 Доступные версии (новые сверху):"
+  i=1
+  echo "$VERSIONS" > /tmp/awgm-upx-list.$$
+  while read -r v; do
+    [ -n "$v" ] || continue
+    disp=${v#awgm-}
+    echo "   $i) $disp"
+    i=$((i + 1))
+  done < /tmp/awgm-upx-list.$$
+  max=$((i - 1))
+
+  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = выход): " "")
+  if [ -z "$c" ]; then
+    ver_tag=$(head -1 /tmp/awgm-upx-list.$$)
+  elif [ "$c" = "0" ]; then
+    echo "Отменено."
+    rm -f /tmp/awgm-upx-list.$$
+    return 0
+  elif echo "$c" | grep -qE '^[0-9]+$'; then
+    if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
+      ver_tag=$(sed -n "${c}p" /tmp/awgm-upx-list.$$)
+    else
+      echo "❌ Номер вне диапазона 1-$max (0 = выход)"
+      rm -f /tmp/awgm-upx-list.$$
+      return 1
+    fi
+  else
+    case "$c" in
+      awgm-*) ver_tag="$c" ;;
+      *)      ver_tag="awgm-$c" ;;
+    esac
+  fi
+  rm -f /tmp/awgm-upx-list.$$
+
+  ver_disp=${ver_tag#awgm-}
+  ipk_name="awg-manager_${ver_disp}_${S}_compressed.ipk"
+  url="https://github.com/${REPO}/releases/download/${ver_tag}/${ipk_name}"
+
+  echo ""
+  echo "📥 Скачивание $ver_disp ($ipk_name)..."
+  mkdir -p "$TMP"
+  cd "$TMP" || return 1
+  rm -f "$ipk_name"
+
+  if ! download_file "$url" "$ipk_name" 100000; then
+    echo "❌ Ошибка скачивания $ver_disp"
+    echo "   URL: $url"
+    return 1
+  fi
+
+  echo "📦 Установка $ipk_name ..."
+  if opkg install --force-reinstall "./$ipk_name" 2>/dev/null || opkg install --force-downgrade "./$ipk_name"; then
+    echo "🎉 Установлен awg-manager $ver_disp (UPX)"
+  else
+    echo "⚠️ Ошибка установки"
+    rm -f "./$ipk_name"
+    return 1
+  fi
+  rm -f "./$ipk_name"
+  return 0
+}
+
+# Пункт [3]: официальный sing-box с выбором версии (hoaxisr/amnezia-box)
+install_sb_official_version_select() {
+  echo ""
+  echo "=== Установка sing-box (официальный · выбор версии) ==="
+  echo ""
+
+  case "$ARCH" in
+    aarch64) SB_ARCH_SUFFIX="aarch64-3.10" ;;
+    mipsel)  SB_ARCH_SUFFIX="mipsel-3.4" ;;
+    mips)    SB_ARCH_SUFFIX="mips-3.4" ;;
+    *)
+      echo "❌ Неизвестная архитектура: $ARCH"
+      return 1
+      ;;
+  esac
+  echo "✅ Архитектура: $A → $SB_ARCH_SUFFIX"
+
+  echo "→ Список релизов hoaxisr/amnezia-box..."
+  API_JSON=$(fetch_text "https://api.github.com/repos/hoaxisr/amnezia-box/releases?per_page=20" || true)
+  VERSIONS=$(echo "$API_JSON" | sed -n 's/.*"tag_name": "\([^"]*\)".*/\1/p' | grep -v '^latest$' | head -15)
+
+  if [ -z "$VERSIONS" ]; then
+    echo "   API пуст, пробуем HTML..."
+    HTML=$(fetch_text "https://github.com/hoaxisr/amnezia-box/releases" || true)
+    VERSIONS=$(echo "$HTML" | grep -oE '/hoaxisr/amnezia-box/releases/tag/[^"<> ]+' | sed 's|.*/||' | grep -v '^latest$' | sort -u | sort -Vr | head -15)
+  fi
+
+  if [ -z "$VERSIONS" ]; then
+    echo "❌ Не удалось получить список версий sing-box"
+    return 1
+  fi
+
+  echo ""
+  echo "🔢 Доступные версии (новые сверху):"
+  i=1
+  echo "$VERSIONS" > /tmp/sb-off-list.$$
+  while read -r v; do
+    [ -n "$v" ] || continue
+    echo "   $i) ${v#v}"
+    i=$((i + 1))
+  done < /tmp/sb-off-list.$$
+  max=$((i - 1))
+
+  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = выход): " "")
+  if [ -z "$c" ]; then
+    ver_tag=$(head -1 /tmp/sb-off-list.$$)
+  elif [ "$c" = "0" ]; then
+    echo "Отменено."
+    rm -f /tmp/sb-off-list.$$
+    return 0
+  elif echo "$c" | grep -qE '^[0-9]+$'; then
+    if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
+      ver_tag=$(sed -n "${c}p" /tmp/sb-off-list.$$)
+    else
+      echo "❌ Номер вне диапазона 1-$max (0 = выход)"
+      rm -f /tmp/sb-off-list.$$
+      return 1
+    fi
+  else
+    ver_tag="$c"
+  fi
+  rm -f /tmp/sb-off-list.$$
+
+  ver_disp=${ver_tag#v}
+  sb_name="singbox-${ver_disp}-${SB_ARCH_SUFFIX}"
+  url="https://github.com/hoaxisr/amnezia-box/releases/download/${ver_tag}/${sb_name}"
+
+  echo ""
+  echo "📥 Скачивание $ver_disp ($sb_name)..."
+  mkdir -p "$TMP"
+  cd "$TMP" || return 1
+  rm -f "$sb_name"
+
+  if ! download_file "$url" "$sb_name" 100000; then
+    echo "❌ Ошибка скачивания $ver_disp"
+    echo "   URL: $url"
+    return 1
+  fi
+
+  mkdir -p "$SINGBOX_DIR"
+
+  if [ -x "$SINGBOX_DIR/sing-box" ]; then
+    do_bak=0
+    if [ -n "$BACKUP_SB" ]; then
+      case "$BACKUP_SB" in
+        1|y|Y|yes|YES) do_bak=1 ;;
+      esac
+    else
+      [ "$(yes_no "Сохранить старый sing-box как sing-box.bak? [y/N]: " "n")" = "1" ] && do_bak=1
+    fi
+    if [ "$do_bak" = "1" ]; then
+      cp "$SINGBOX_DIR/sing-box" "$SINGBOX_DIR/sing-box.bak" 2>/dev/null || true
+      echo "   💾 бэкап → $SINGBOX_DIR/sing-box.bak"
+    fi
+  fi
+
+  cp "$sb_name" "$SINGBOX_DIR/sing-box"
+  chmod +x "$SINGBOX_DIR/sing-box"
+  write_sb_meta "$ver_disp"
+  echo "✅ sing-box $ver_disp → $SINGBOX_DIR/sing-box"
+  echo "   version: $ver_disp"
+
+  rm -f "$sb_name"
+  echo "🎉 Установлен sing-box $ver_disp (официальный)"
+  return 0
+}
+
 # Пункт [4]: UPX sing-box с выбором версии (из топиков sb-*)
 install_sb_version_select() {
   echo ""
-  echo "=== Установка sing-box (UPX с выбором версии) ==="
+  echo "=== Установка sing-box (UPX · выбор версии) ==="
   echo ""
 
   # ARCH уже определён в detect_arch: aarch64 / mipsel / mips
@@ -800,15 +1024,16 @@ install_sb_version_select() {
 
   cp "$sb_name" "$SINGBOX_DIR/sing-box"
   chmod +x "$SINGBOX_DIR/sing-box"
+  write_sb_meta "$ver_disp"
   echo "✅ sing-box $ver_disp → $SINGBOX_DIR/sing-box"
-  "$SINGBOX_DIR/sing-box" version 2>/dev/null | head -1 || true
+  echo "   version: $ver_disp"
 
   rm -f "$sb_name"
   echo "🎉 Установлен sing-box $ver_disp (UPX)"
   return 0
 }
 
-# Пункт [6]
+# Пункт [5]
 run_tunnel_access() {
   echo ""
   echo "=== Настройка доступа через туннель ==="
