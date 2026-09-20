@@ -1099,10 +1099,8 @@ main() {
   echo ""
   detect_installed
   show_installed
-
-  # Меню сразу — без ожидания GitHub.
-  # Список файлов из release compressed нужен только для пунктов 2/3/4
-  # (и неинтерактивного режима INSTALL_AWG / INSTALL_SB).
+  fetch_release_assets
+  show_available
   run_menu
 
   if [ "$DO_AWG" != "1" ] && [ "$DO_SB" != "1" ]; then
@@ -1110,8 +1108,7 @@ main() {
     exit 0
   fi
 
-  fetch_release_assets
-  show_available
+  # NEW_AWG / NEW_SB уже из fetch_release_assets выше
   decide_awg
   decide_sb
 
