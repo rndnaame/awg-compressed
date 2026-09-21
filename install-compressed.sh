@@ -74,7 +74,7 @@ hl_line() {
 print_banner() {
   clear 2>/dev/null || true
   printf '%b\n' "${light_blue}================================================${reset}"
-  printf '%b\n' "${light_blue}   Интерактивный установщик AWG-Manager (Sing-Box)${reset}"
+  printf '%b\n' "${light_blue}Интерактивный установщик AWG-Manager (Sing-Box)${reset}"
   printf '%b\n' "${light_blue}================================================${reset}"
   echo ""
 }
