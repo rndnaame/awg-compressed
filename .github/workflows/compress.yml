@@ -33,6 +33,7 @@ jobs:
             echo "skip=true"
             echo "skip_awg=true"
             echo "skip_sb=true"
+            echo "refresh_latest=false"
             echo "awg_ver="
             echo "sb_ver="
             echo "awg_tag="
@@ -159,76 +160,86 @@ jobs:
             fi
           done < /tmp/wanted.txt
 
+          # Официальный changelog: repo tag → body (или ссылка)
+          fetch_official_cl() {
+            _repo="$1"
+            _tag="$2"
+            _title="$3"
+            _url="https://github.com/${_repo}/releases/tag/${_tag}"
+            _json=$(curl -sL \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${_repo}/releases/tags/${_tag}" || true)
+            _body=$(echo "$_json" | jq -r '.body // empty' 2>/dev/null || true)
+            echo ""
+            echo "<details>"
+            echo "<summary>Changelog ${_title} (официальный)</summary>"
+            echo ""
+            if [ -n "$_body" ] && [ "$_body" != "null" ]; then
+              echo "$_body"
+              echo ""
+              echo "— Источник: ${_url}"
+            else
+              echo "Не удалось загрузить notes. Смотрите: ${_url}"
+            fi
+            echo ""
+            echo "</details>"
+          }
+
           {
             echo "### ${AWG_NAME:-awg-manager UPX}"
             echo ""
-            echo "Архивный топик-релиз — **не удаляется** при выходе новых версий."
-            echo ""
-            echo "Актуальные файлы для установщика всегда в теге \`${ROLLING_TAG}\`."
+            echo "UPX-сборка awg-manager. Актуальные файлы для установщика — в теге \`${ROLLING_TAG}\`."
             echo ""
             echo '```sh'
             echo "curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
             echo '```'
+            if [ -n "$AWG_VER" ]; then
+              fetch_official_cl "hoaxisr/awg-manager" "v${AWG_VER}" "awg-manager v${AWG_VER}"
+            fi
           } > release-body-awg.md
 
           {
             echo "### ${SB_NAME:-sing-box UPX}"
             echo ""
-            echo "Архивный топик-релиз — **не удаляется** при выходе новых версий."
-            echo ""
-            echo "Актуальные файлы для установщика всегда в теге \`${ROLLING_TAG}\`."
+            echo "UPX-сборка sing-box (amnezia-box). Актуальные файлы для установщика — в теге \`${ROLLING_TAG}\`."
             echo ""
             echo '```sh'
             echo "curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
             echo '```'
+            if [ -n "$SB_VER" ]; then
+              fetch_official_cl "hoaxisr/amnezia-box" "${SB_VER}" "sing-box ${SB_VER}"
+            fi
           } > release-body-sb.md
 
           {
-            echo "В этом релизе только крайние версии, сжатые UPX."
+            echo "В этом релизе только **крайние** версии, сжатые UPX."
             echo ""
             [ -n "$AWG_VER" ] && echo "- awg-manager: **v${AWG_VER}** → топик \`${AWG_TAG}\`"
             [ -n "$SB_VER" ] && echo "- sing-box: **${SB_VER}** → топик \`${SB_TAG}\`"
             echo ""
-            echo "История версий хранится в отдельных релизах \`awgm-*\` и \`sb-*\`."
+            echo "История версий — в отдельных релизах \`awgm-*\` и \`sb-*\`."
             echo ""
             echo '```sh'
             echo "curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
             echo '```'
-
-            # Changelog с официального релиза awg-manager (под спойлером)
             if [ -n "$AWG_VER" ]; then
-              CL_JSON=$(curl -sL \
-                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-                -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/repos/hoaxisr/awg-manager/releases/tags/v${AWG_VER}" || true)
-              CL_BODY=$(echo "$CL_JSON" | jq -r '.body // empty' 2>/dev/null || true)
-              if [ -n "$CL_BODY" ] && [ "$CL_BODY" != "null" ]; then
-                echo ""
-                echo "<details>"
-                echo "<summary>Changelog awg-manager v${AWG_VER} (официальный)</summary>"
-                echo ""
-                echo "$CL_BODY"
-                echo ""
-                echo "— Источник: https://github.com/hoaxisr/awg-manager/releases/tag/v${AWG_VER}"
-                echo ""
-                echo "</details>"
-              else
-                echo ""
-                echo "<details>"
-                echo "<summary>Changelog awg-manager v${AWG_VER}</summary>"
-                echo ""
-                echo "Не удалось загрузить notes. Смотрите: https://github.com/hoaxisr/awg-manager/releases/tag/v${AWG_VER}"
-                echo ""
-                echo "</details>"
-              fi
+              fetch_official_cl "hoaxisr/awg-manager" "v${AWG_VER}" "awg-manager v${AWG_VER}"
+            fi
+            if [ -n "$SB_VER" ]; then
+              fetch_official_cl "hoaxisr/amnezia-box" "${SB_VER}" "sing-box ${SB_VER}"
             fi
           } > release-body-rolling.md
 
           if [ "$NEED" -eq 0 ]; then
             echo ">>> Сжимать нечего (файлы уже в ${ROLLING_TAG})"
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            # Всё равно обновим body + make_latest, чтобы Latest оставался сверху
+            echo "refresh_latest=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          echo "refresh_latest=false" >> "$GITHUB_OUTPUT"
 
           echo "skip=false" >> "$GITHUB_OUTPUT"
           [ "$NEED_AWG" -eq 1 ] && echo "skip_awg=false" >> "$GITHUB_OUTPUT"
@@ -335,62 +346,132 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update compressed (только latest)
+      # Полный набор ассетов для Latest: новые из out/ + недостающие с текущего compressed
+      - name: Prepare full Latest asset set
         if: steps.build.outputs.skip != 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: compressed
-          name: ${{ steps.build.outputs.rolling_name }}
-          body_path: release-body-rolling.md
-          files: |
-            out/*.ipk
-            out/singbox-*_compressed
-          fail_on_unmatched_files: false
-          make_latest: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # После успешной публикации: в compressed оставляем только крайние версии.
-      # Раньше prune шёл ДО upload → удалял старый AWG, а новый не заливал (skip) → в Latest оставался только sing-box.
-      - name: Prune compressed to latest only
-        if: success()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           OUR_REPO="${{ github.repository }}"
           TAG="compressed"
-          [ -f wanted.txt ] || { echo "no wanted.txt"; exit 0; }
-
-          echo "Крайние версии (оставить в $TAG):"
-          sed 's/^/  /' wanted.txt
+          mkdir -p out/latest
+          # свежесобранное
+          cp -n out/*.ipk out/latest/ 2>/dev/null || true
+          cp -n out/singbox-*_compressed out/latest/ 2>/dev/null || true
+          cp -n out/awg/* out/latest/ 2>/dev/null || true
+          cp -n out/sb/* out/latest/ 2>/dev/null || true
 
           JSON=$(curl -sL \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${OUR_REPO}/releases/tags/${TAG}" || true)
 
-          if ! echo "$JSON" | jq -e '.id' >/dev/null 2>&1; then
-            echo "Релиза $TAG ещё нет"
+          if [ -f wanted.txt ] && echo "$JSON" | jq -e '.assets' >/dev/null 2>&1; then
+            while read -r want; do
+              [ -n "$want" ] || continue
+              [ -f "out/latest/$want" ] && continue
+              url=$(echo "$JSON" | jq -r --arg n "$want" '.assets[] | select(.name==$n) | .browser_download_url' | head -1)
+              if [ -n "$url" ] && [ "$url" != "null" ]; then
+                echo "  + из старого $TAG: $want"
+                curl -sL -o "out/latest/$want" \
+                  -H "Authorization: Bearer $GITHUB_TOKEN" \
+                  -H "Accept: application/octet-stream" \
+                  "$url" || true
+              fi
+            done < wanted.txt
+          fi
+
+          echo "Ассеты для Latest:"
+          ls -lh out/latest/ || true
+
+      # Удаляем старый compressed и создаём заново → всегда сверху в списке релизов
+      - name: Recreate compressed (Latest, always on top)
+        if: steps.build.outputs.skip != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          OUR_REPO="${{ github.repository }}"
+          TAG="compressed"
+          JSON=$(curl -sL \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OUR_REPO}/releases/tags/${TAG}" || true)
+          RID=$(echo "$JSON" | jq -r '.id // empty')
+          if [ -n "$RID" ]; then
+            echo "Удаляем старый release $TAG (id=$RID)..."
+            curl -sL -X DELETE \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${OUR_REPO}/releases/${RID}"
+            # тег может остаться — softprops/gh пересоздаст release на том же теге
+            sleep 2
+          fi
+
+      - name: Publish compressed (Latest)
+        if: steps.build.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: compressed
+          name: ${{ steps.build.outputs.rolling_name }}
+          body_path: release-body-rolling.md
+          files: out/latest/*
+          fail_on_unmatched_files: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Когда сжимать нечего — всё равно body + make_latest, чтобы Latest оставался сверху
+      - name: Refresh Latest body and pin as latest
+        if: steps.build.outputs.refresh_latest == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          OUR_REPO="${{ github.repository }}"
+          TAG="compressed"
+          [ -f release-body-rolling.md ] || { echo "no body"; exit 0; }
+
+          JSON=$(curl -sL \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OUR_REPO}/releases/tags/${TAG}" || true)
+          RID=$(echo "$JSON" | jq -r '.id // empty')
+          if [ -z "$RID" ]; then
+            echo "Релиза $TAG нет — нечего обновлять"
             exit 0
           fi
 
-          echo ""
-          echo "Очистка ассетов только в теге $TAG (другие релизы не трогаем):"
+          # Пересоздаём release с теми же ассетами: delete → create → upload
+          # так published_at свежий и Latest снова сверху
+          mkdir -p out/latest
           echo "$JSON" | jq -c '.assets[]?' | while read -r row; do
             name=$(echo "$row" | jq -r '.name')
-            aid=$(echo "$row" | jq -r '.id')
-            case "$name" in
-              awg-manager_*_compressed.ipk|singbox-*_compressed) ;;
-              *) echo "  keep (other): $name"; continue ;;
-            esac
-            if grep -qxF "$name" wanted.txt; then
-              echo "  keep latest: $name"
-            else
-              echo "  DELETE from $TAG: $name"
-              curl -sL -o /dev/null -w "    HTTP %{http_code}\n" -X DELETE \
-                -H "Authorization: Bearer $GITHUB_TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/repos/${OUR_REPO}/releases/assets/${aid}" || true
-            fi
+            url=$(echo "$row" | jq -r '.browser_download_url')
+            echo "  скачиваем $name"
+            curl -sL -o "out/latest/$name" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/octet-stream" \
+              "$url" || true
           done
+
+          echo "Удаляем $TAG (id=$RID)..."
+          curl -sL -X DELETE \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OUR_REPO}/releases/${RID}"
+          sleep 2
+
+      - name: Re-publish compressed after refresh
+        if: steps.build.outputs.refresh_latest == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: compressed
+          name: ${{ steps.build.outputs.rolling_name }}
+          body_path: release-body-rolling.md
+          files: out/latest/*
+          fail_on_unmatched_files: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
