@@ -160,7 +160,7 @@ jobs:
             fi
           done < /tmp/wanted.txt
 
-          # Официальный changelog: repo tag → body (или ссылка)
+          # Официальный changelog: только body upstream (без лишнего текста)
           fetch_official_cl() {
             _repo="$1"
             _tag="$2"
@@ -171,62 +171,54 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${_repo}/releases/tags/${_tag}" || true)
             _body=$(echo "$_json" | jq -r '.body // empty' 2>/dev/null || true)
-            echo ""
-            echo "<details>"
-            echo "<summary>Changelog ${_title} (официальный)</summary>"
-            echo ""
+            # fallback без токена (иногда GITHUB_TOKEN режет чужие private rate)
+            if [ -z "$_body" ] || [ "$_body" = "null" ]; then
+              _json=$(curl -sL \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${_repo}/releases/tags/${_tag}" || true)
+              _body=$(echo "$_json" | jq -r '.body // empty' 2>/dev/null || true)
+            fi
             if [ -n "$_body" ] && [ "$_body" != "null" ]; then
               echo "$_body"
               echo ""
               echo "— Источник: ${_url}"
             else
-              echo "Не удалось загрузить notes. Смотрите: ${_url}"
+              echo "Официальный changelog: ${_url}"
             fi
-            echo ""
-            echo "</details>"
           }
 
+          # Топик-релизы: только официальный changelog
           {
-            echo "### ${AWG_NAME:-awg-manager UPX}"
-            echo ""
-            echo "UPX-сборка awg-manager. Актуальные файлы для установщика — в теге \`${ROLLING_TAG}\`."
-            echo ""
-            echo '```sh'
-            echo "curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
-            echo '```'
             if [ -n "$AWG_VER" ]; then
               fetch_official_cl "hoaxisr/awg-manager" "v${AWG_VER}" "awg-manager v${AWG_VER}"
+            else
+              echo ""
             fi
           } > release-body-awg.md
 
           {
-            echo "### ${SB_NAME:-sing-box UPX}"
-            echo ""
-            echo "UPX-сборка sing-box (amnezia-box). Актуальные файлы для установщика — в теге \`${ROLLING_TAG}\`."
-            echo ""
-            echo '```sh'
-            echo "curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
-            echo '```'
             if [ -n "$SB_VER" ]; then
               fetch_official_cl "hoaxisr/amnezia-box" "${SB_VER}" "sing-box ${SB_VER}"
+            else
+              echo ""
             fi
           } > release-body-sb.md
 
           {
-            echo "В этом релизе только **крайние** версии, сжатые UPX."
+            echo "Крайние UPX-версии:"
             echo ""
-            [ -n "$AWG_VER" ] && echo "- awg-manager: **v${AWG_VER}** → топик \`${AWG_TAG}\`"
-            [ -n "$SB_VER" ] && echo "- sing-box: **${SB_VER}** → топик \`${SB_TAG}\`"
+            [ -n "$AWG_VER" ] && echo "- awg-manager: **v${AWG_VER}** → \`${AWG_TAG}\`"
+            [ -n "$SB_VER" ] && echo "- sing-box: **${SB_VER}** → \`${SB_TAG}\`"
             echo ""
-            echo "История версий — в отдельных релизах \`awgm-*\` и \`sb-*\`."
-            echo ""
-            echo '```sh'
-            echo "curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
-            echo '```'
             if [ -n "$AWG_VER" ]; then
+              echo "### Changelog awg-manager v${AWG_VER}"
+              echo ""
               fetch_official_cl "hoaxisr/awg-manager" "v${AWG_VER}" "awg-manager v${AWG_VER}"
+              echo ""
             fi
             if [ -n "$SB_VER" ]; then
+              echo "### Changelog sing-box ${SB_VER}"
+              echo ""
               fetch_official_cl "hoaxisr/amnezia-box" "${SB_VER}" "sing-box ${SB_VER}"
             fi
           } > release-body-rolling.md

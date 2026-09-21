@@ -33,8 +33,6 @@ jobs:
         run: |
           set -e
           OUR_REPO="${{ github.repository }}"
-          INSTALL_CMD="curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
-          ROLLING_TAG="compressed"
 
           api() {
             # api METHOD PATH [data_file]
@@ -56,85 +54,64 @@ jobs:
             fi
           }
 
+          # Только официальный body upstream
           fetch_official_cl() {
             _repo="$1"
             _tag="$2"
-            _title="$3"
             _url="https://github.com/${_repo}/releases/tag/${_tag}"
             _json=$(curl -sL \
               -H "Authorization: Bearer ${GITHUB_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${_repo}/releases/tags/${_tag}" || true)
             _body=$(echo "$_json" | jq -r '.body // empty' 2>/dev/null || true)
-            {
+            if [ -z "$_body" ] || [ "$_body" = "null" ]; then
+              _json=$(curl -sL \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${_repo}/releases/tags/${_tag}" || true)
+              _body=$(echo "$_json" | jq -r '.body // empty' 2>/dev/null || true)
+            fi
+            if [ -n "$_body" ] && [ "$_body" != "null" ]; then
+              echo "$_body"
               echo ""
-              echo "<details>"
-              echo "<summary>Changelog ${_title} (официальный)</summary>"
-              echo ""
-              if [ -n "$_body" ] && [ "$_body" != "null" ]; then
-                echo "$_body"
-                echo ""
-                echo "— Источник: ${_url}"
-              else
-                echo "Не удалось загрузить notes. Смотрите: ${_url}"
-              fi
-              echo ""
-              echo "</details>"
-            }
+              echo "— Источник: ${_url}"
+            else
+              echo "Официальный changelog: ${_url}"
+            fi
           }
 
           body_awg() {
-            _ver="$1"
-            {
-              echo "### v${_ver} (AWG-M UPX)"
-              echo ""
-              echo "UPX-сборка awg-manager. Актуальные файлы для установщика — в теге \`${ROLLING_TAG}\`."
-              echo ""
-              echo '```sh'
-              echo "$INSTALL_CMD"
-              echo '```'
-              fetch_official_cl "hoaxisr/awg-manager" "v${_ver}" "awg-manager v${_ver}"
-            }
+            fetch_official_cl "hoaxisr/awg-manager" "v$1"
           }
 
           body_sb() {
-            _ver="$1"
-            {
-              echo "### ${_ver} (sing-box UPX)"
-              echo ""
-              echo "UPX-сборка sing-box (amnezia-box). Актуальные файлы для установщика — в теге \`${ROLLING_TAG}\`."
-              echo ""
-              echo '```sh'
-              echo "$INSTALL_CMD"
-              echo '```'
-              fetch_official_cl "hoaxisr/amnezia-box" "${_ver}" "sing-box ${_ver}"
-            }
+            fetch_official_cl "hoaxisr/amnezia-box" "$1"
           }
 
           body_rolling() {
-            # версии из имён ассетов текущего compressed
             _json="$1"
-            _awg=$(echo "$_json" | jq -r '.assets[].name' 2>/dev/null | grep -oE 'awg-manager_[^_]+' | head -1 | sed 's/awg-manager_//')
-            _sb=$(echo "$_json" | jq -r '.assets[].name' 2>/dev/null | grep -oE 'singbox-[^-]+(-[^-]+)*' | head -1 | sed 's/^singbox-//;s/-aarch64.*//;s/-mips.*//;s/_compressed$//')
-            # более надёжный разбор sing-box имени: singbox-VER-arch_compressed
+            _awg=$(echo "$_json" | jq -r '.assets[].name' 2>/dev/null | grep '^awg-manager_' | head -1 | sed -n 's/^awg-manager_\([^_]*\)_.*/\1/p')
             _sb=$(echo "$_json" | jq -r '.assets[].name' 2>/dev/null | grep '^singbox-' | head -1 | sed -n 's/^singbox-\(.*\)-\(aarch64\|mipsel\|mips\)-.*/\1/p')
             _awg_tag=""
             _sb_tag=""
             [ -n "$_awg" ] && _awg_tag=$(echo "awgm-${_awg}" | sed 's/[^a-zA-Z0-9._-]/-/g')
             [ -n "$_sb" ] && _sb_tag=$(echo "sb-${_sb}" | sed 's/[^a-zA-Z0-9._-]/-/g')
             {
-              echo "В этом релизе только **крайние** версии, сжатые UPX."
+              echo "Крайние UPX-версии:"
               echo ""
-              [ -n "$_awg" ] && echo "- awg-manager: **v${_awg}** → топик \`${_awg_tag}\`"
-              [ -n "$_sb" ] && echo "- sing-box: **${_sb}** → топик \`${_sb_tag}\`"
+              [ -n "$_awg" ] && echo "- awg-manager: **v${_awg}** → \`${_awg_tag}\`"
+              [ -n "$_sb" ] && echo "- sing-box: **${_sb}** → \`${_sb_tag}\`"
               echo ""
-              echo "История версий — в отдельных релизах \`awgm-*\` и \`sb-*\`."
-              echo ""
-              echo '```sh'
-              echo "$INSTALL_CMD"
-              echo '```'
-              [ -n "$_awg" ] && fetch_official_cl "hoaxisr/awg-manager" "v${_awg}" "awg-manager v${_awg}"
-              [ -n "$_sb" ] && fetch_official_cl "hoaxisr/amnezia-box" "${_sb}" "sing-box ${_sb}"
+              if [ -n "$_awg" ]; then
+                echo "### Changelog awg-manager v${_awg}"
+                echo ""
+                fetch_official_cl "hoaxisr/awg-manager" "v${_awg}"
+                echo ""
+              fi
+              if [ -n "$_sb" ]; then
+                echo "### Changelog sing-box ${_sb}"
+                echo ""
+                fetch_official_cl "hoaxisr/amnezia-box" "${_sb}"
+              fi
             }
           }
 
