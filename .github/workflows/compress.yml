@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   compress:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - name: Install tools
@@ -322,7 +322,7 @@ jobs:
 
       - name: Publish AWG-M topic (архив, навсегда)
         if: steps.build.outputs.skip_awg != 'true' && steps.build.outputs.awg_tag != ''
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.build.outputs.awg_tag }}
           name: ${{ steps.build.outputs.awg_name }}
@@ -335,7 +335,7 @@ jobs:
 
       - name: Publish sing-box topic (архив, навсегда)
         if: steps.build.outputs.skip_sb != 'true' && steps.build.outputs.sb_tag != ''
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.build.outputs.sb_tag }}
           name: ${{ steps.build.outputs.sb_name }}
@@ -411,7 +411,7 @@ jobs:
 
       - name: Publish compressed (Latest)
         if: steps.build.outputs.skip != 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: compressed
           name: ${{ steps.build.outputs.rolling_name }}
@@ -465,7 +465,7 @@ jobs:
 
       - name: Re-publish compressed after refresh
         if: steps.build.outputs.refresh_latest == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: compressed
           name: ${{ steps.build.outputs.rolling_name }}
