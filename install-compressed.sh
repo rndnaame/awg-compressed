@@ -24,8 +24,23 @@ TUNNEL_SCRIPT_URL="https://raw.githubusercontent.com/rndnaame/awg-compressed/mai
 DEFAULT_IFACES="nwg0 nwg1 t2s0 t2s1 opkgtun10 awgm0 __default__"
 
 # ---------------------------------------------------------------------------
-# UI
+# UI (цвета как у awgm-installer; NO_COLOR=1 — без ANSI)
 # ---------------------------------------------------------------------------
+green="\033[92m"
+red="\033[91m"
+yellow="\033[93m"
+light_blue="\033[96m"
+bold="\033[1m"
+reset="\033[0m"
+
+HL_UPD='\033[1;93m'
+HL_RST='\033[0m'
+
+if [ -n "$NO_COLOR" ]; then
+  green=""; red=""; yellow=""; light_blue=""; bold=""; reset=""
+  HL_UPD=""; HL_RST=""
+fi
+
 ask() {
   prompt="$1"
   default="$2"
@@ -48,16 +63,20 @@ yes_no() {
   esac
 }
 
-HL_UPD='\033[1;93m'
-HL_RST='\033[0m'
-[ -n "$NO_COLOR" ] && HL_UPD='' && HL_RST=''
-
 hl_line() {
   if [ "$1" = "1" ]; then
     printf '%b%s%b\n' "$HL_UPD" "$2" "$HL_RST"
   else
     printf '%s\n' "$2"
   fi
+}
+
+print_banner() {
+  clear 2>/dev/null || true
+  printf '%b\n' "${light_blue}================================================${reset}"
+  printf '%b\n' "${light_blue}   Интерактивный установщик AWG-Manager (Sing-Box)${reset}"
+  printf '%b\n' "${light_blue}================================================${reset}"
+  echo ""
 }
 
 # 0 = equal, 1 = v1 > v2, 2 = v1 < v2
@@ -107,6 +126,31 @@ iface_ip() {
   ip -4 -o addr show dev "$1" 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1
 }
 
+# GitHub HTTP-прокси (быстрый fallback, как в awgm-installer)
+GH_PROXIES="https://gh-proxy.com/ https://ghfast.top/"
+
+# Скачать URL → OUT через curl/wget [iface] [proxy_prefix]
+# $1=url $2=out $3=try_secs $4=curl_iface $5=wget_bind $6=proxy_prefix
+_dl_once() {
+  _u="$1"; _o="$2"; _ts="$3"; _ci="$4"; _wb="$5"; _px="$6"
+  _real="$_u"
+  [ -n "$_px" ] && _real="${_px}${_u}"
+  rm -f "$_o"
+  if [ "$HAS_CURL" -eq 1 ]; then
+    # shellcheck disable=SC2086
+    run_timeout "$_ts" curl -fL --connect-timeout 5 --max-time "$_ts" \
+      --speed-time 15 --speed-limit 1000 \
+      -H "Cache-Control: no-cache" -H "Pragma: no-cache" \
+      $_ci -o "$_o" "$_real" && return 0
+  fi
+  if [ "$HAS_WGET" -eq 1 ]; then
+    # shellcheck disable=SC2086
+    run_timeout "$_ts" wget -q -T 10 --no-cache $_wb -O "$_o" "$_real" 2>/dev/null && return 0
+  fi
+  rm -f "$_o"
+  return 1
+}
+
 # download_file URL OUT [min_bytes]
 download_file() {
   url="$1"
@@ -150,56 +194,80 @@ download_file() {
       [ -n "$_ip" ] && wget_bind="--bind-address=$_ip" || wget_bind=""
     fi
 
-    if [ "$HAS_CURL" -eq 1 ]; then
-      echo "   ↻ curl через $label (макс ${try_secs}с) ..."
-      rm -f "$out"
-      # shellcheck disable=SC2086
-      run_timeout "$try_secs" curl -fL --connect-timeout 8 --max-time "$try_secs" \
-        --speed-time 15 --speed-limit 1000 \
-        -H "Cache-Control: no-cache" -H "Pragma: no-cache" \
-        $curl_iface -o "$out" "$url"
-      rc=$?
+    echo "   ↻ через $label (макс ${try_secs}с) ..."
+    if _dl_once "$url" "$out" "$try_secs" "$curl_iface" "$wget_bind" ""; then
       if try_ok; then
-        echo "   ✓ curl/$label ($(du -h "$out" | awk '{print $1}'))"
+        echo "   ✓ $label ($(du -h "$out" | awk '{print $1}'))"
         return 0
       fi
-      [ "$rc" = "124" ] && echo "   ⏱  curl таймаут $label"
-      rm -f "$out"
     fi
-
-    if [ "$HAS_WGET" -eq 1 ]; then
-      if [ "$iface" != "__default__" ] && [ -z "$wget_bind" ]; then
-        echo "   ⏭  wget/$label — нет IPv4 для --bind-address"
-        continue
-      fi
-      echo "   ↻ wget через $label (макс ${try_secs}с) ..."
-      rm -f "$out"
-      # shellcheck disable=SC2086
-      if ! run_timeout "$try_secs" wget -q -T 15 --no-cache $wget_bind -O "$out" "$url" 2>/dev/null; then
-        rm -f "$out"
-        if [ -n "$wget_bind" ]; then
-          run_timeout "$try_secs" wget -q -T 15 $wget_bind -O "$out" "$url" 2>/dev/null || \
-          run_timeout "$try_secs" wget -q -T 15 -O "$out" "$url" 2>/dev/null || true
-        else
-          run_timeout "$try_secs" wget -q -T 15 -O "$out" "$url" 2>/dev/null || true
-        fi
-      fi
-      if try_ok; then
-        echo "   ✓ wget/$label ($(du -h "$out" | awk '{print $1}'))"
-        return 0
-      fi
-      rm -f "$out"
-    fi
+    rm -f "$out"
   done
+
+  # HTTP-прокси GitHub (после интерфейсов)
+  case "$url" in
+    https://github.com/*|https://api.github.com/*|https://raw.githubusercontent.com/*)
+      for px in $GH_PROXIES; do
+        px_label=$(echo "$px" | sed 's|https://||;s|/$||')
+        echo "   ↻ proxy $px_label (макс ${try_secs}с) ..."
+        if _dl_once "$url" "$out" "$try_secs" "" "" "$px"; then
+          if try_ok; then
+            echo "   ✓ proxy/$px_label ($(du -h "$out" | awk '{print $1}'))"
+            return 0
+          fi
+        fi
+        rm -f "$out"
+      done
+      ;;
+  esac
 
   echo "   ✗ не удалось скачать"
   return 1
 }
 
+# Быстрый GitHub API — как awgm-installer: голый curl без run_timeout/speed-limit
+# Порядок: direct → gh-proxy → ghfast → (тихо) fetch_text с интерфейсами
+fetch_github_api() {
+  url="$1"
+  _out=""
+
+  if command -v curl >/dev/null 2>&1; then
+    _out=$(curl -s --connect-timeout 5 --max-time 12 "$url" 2>/dev/null) || true
+    if [ -n "$_out" ]; then
+      printf '%s\n' "$_out"
+      return 0
+    fi
+    for px in $GH_PROXIES; do
+      _out=$(curl -s --connect-timeout 5 --max-time 12 "${px}${url}" 2>/dev/null) || true
+      if [ -n "$_out" ]; then
+        printf '%s\n' "$_out"
+        return 0
+      fi
+    done
+  elif command -v wget >/dev/null 2>&1; then
+    _out=$(wget -q -T 8 -O - "$url" 2>/dev/null) || true
+    if [ -n "$_out" ]; then
+      printf '%s\n' "$_out"
+      return 0
+    fi
+    for px in $GH_PROXIES; do
+      _out=$(wget -q -T 8 -O - "${px}${url}" 2>/dev/null) || true
+      if [ -n "$_out" ]; then
+        printf '%s\n' "$_out"
+        return 0
+      fi
+    done
+  fi
+
+  # Медленный fallback (туннели) — без лишнего вывода
+  fetch_text "$url"
+}
+
+# fetch текста (HTML/прочее): default → proxy → интерфейсы
 fetch_text() {
   url="$1"
-  # Короче таймаут: API/HTML небольшие, меню не должно ждать по 20с на каждый iface
-  try_secs="${FETCH_TEXT_TIMEOUT:-12}"
+  try_secs="${FETCH_TEXT_TIMEOUT:-8}"
+  short_secs=5
   ifaces="${DL_IFACES:-$DEFAULT_IFACES}"
 
   HAS_CURL=0
@@ -208,50 +276,79 @@ fetch_text() {
   command -v wget >/dev/null 2>&1 && HAS_WGET=1
   [ "$HAS_CURL" -eq 1 ] || [ "$HAS_WGET" -eq 1 ] || return 1
 
-  for iface in $ifaces; do
-    if [ "$iface" = "__default__" ]; then
-      curl_iface=""
-      wget_bind=""
-    else
-      iface_exists "$iface" || continue
-      curl_iface="--interface $iface"
-      _ip=$(iface_ip "$iface")
-      [ -n "$_ip" ] && wget_bind="--bind-address=$_ip" || wget_bind=""
-    fi
+  tmpf=$(mktemp 2>/dev/null || echo "/tmp/ft_$$")
 
-    tmpf=$(mktemp 2>/dev/null || echo "/tmp/ft_$$")
+  # 1) Прямой канал без run_timeout (быстрее на Entware)
+  if [ "$HAS_CURL" -eq 1 ]; then
+    curl -sL --connect-timeout 5 --max-time "$short_secs" -o "$tmpf" "$url" 2>/dev/null || true
+    if [ -s "$tmpf" ]; then
+      cat "$tmpf"
+      rm -f "$tmpf"
+      return 0
+    fi
     rm -f "$tmpf"
+  fi
 
-    if [ "$HAS_CURL" -eq 1 ]; then
-      # shellcheck disable=SC2086
-      run_timeout "$try_secs" curl -fsL --connect-timeout 6 --max-time "$try_secs" \
-        -H "Cache-Control: no-cache" -H "Pragma: no-cache" \
-        $curl_iface -o "$tmpf" "$url"
+  # 2) HTTP-прокси для GitHub
+  case "$url" in
+    https://github.com/*|https://api.github.com/*|https://raw.githubusercontent.com/*)
+      for px in $GH_PROXIES; do
+        if [ "$HAS_CURL" -eq 1 ]; then
+          curl -sL --connect-timeout 5 --max-time "$short_secs" -o "$tmpf" "${px}${url}" 2>/dev/null || true
+          if [ -s "$tmpf" ]; then
+            cat "$tmpf"
+            rm -f "$tmpf"
+            return 0
+          fi
+          rm -f "$tmpf"
+        fi
+      done
+      ;;
+  esac
+
+  # 3) Интерфейсы (туннели)
+  for iface in $ifaces; do
+    [ "$iface" = "__default__" ] && continue
+    iface_exists "$iface" || continue
+    curl_iface="--interface $iface"
+    _ip=$(iface_ip "$iface")
+    [ -n "$_ip" ] && wget_bind="--bind-address=$_ip" || wget_bind=""
+    if _dl_once "$url" "$tmpf" "$try_secs" "$curl_iface" "$wget_bind" ""; then
       if [ -s "$tmpf" ]; then
         cat "$tmpf"
         rm -f "$tmpf"
         return 0
       fi
-      rm -f "$tmpf"
     fi
-
-    if [ "$HAS_WGET" -eq 1 ]; then
-      if [ "$iface" != "__default__" ] && [ -z "$wget_bind" ]; then
-        continue
-      fi
-      # shellcheck disable=SC2086
-      run_timeout "$try_secs" wget -q -T 10 --no-cache $wget_bind -O "$tmpf" "$url" 2>/dev/null || \
-      run_timeout "$try_secs" wget -q -T 10 $wget_bind -O "$tmpf" "$url" 2>/dev/null || \
-      run_timeout "$try_secs" wget -q -T 10 -O "$tmpf" "$url" 2>/dev/null || true
-      if [ -s "$tmpf" ]; then
-        cat "$tmpf"
-        rm -f "$tmpf"
-        return 0
-      fi
-      rm -f "$tmpf"
-    fi
+    rm -f "$tmpf"
   done
+
+  rm -f "$tmpf"
   return 1
+}
+
+# Показать body релиза из GitHub API JSON по tag_name
+show_changelog() {
+  _json="$1"
+  _tag="$2"
+  [ -n "$_json" ] && [ -n "$_tag" ] || { echo "   (changelog недоступен)"; return 1; }
+  echo ""
+  echo "========== Changelog: $_tag =========="
+  echo "$_json" | sed -n "/\"tag_name\": *\"$_tag\"/,/\"body\":/p" | tail -n 1 | \
+    sed 's/^[[:space:]]*"body":[[:space:]]*"//; s/\",$//; s/"$//; s/\\r\\n/\n/g; s/\\n/\n/g; s/\\"/"/g; s/\\\//\//g'
+  echo "======================================"
+  echo ""
+}
+
+# Предупреждение перед force-reinstall / force-downgrade
+warn_force_backup() {
+  echo ""
+  echo "⚠ ВНИМАНИЕ: перед переустановкой или откатом версии сделайте бэкап настроек AWGM!"
+  if [ "$(yes_no "Продолжить установку? [Y/n]: " "y")" != "1" ]; then
+    echo "→ установка отменена"
+    return 1
+  fi
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -347,7 +444,7 @@ write_sb_meta() {
 # ---------------------------------------------------------------------------
 fetch_release_assets() {
   echo "→ Получаем список файлов из релиза..."
-  API_JSON=$(fetch_text "https://api.github.com/repos/${REPO}/releases/tags/${TAG}" || true)
+  API_JSON=$(fetch_github_api "https://api.github.com/repos/${REPO}/releases/tags/${TAG}" || true)
   ASSETS=$(echo "$API_JSON" | grep -oE '"browser_download_url":[[:space:]]*"[^"]+"' | sed 's/.*"\([^"]*\)"/\1/' || true)
 
   if [ -z "$ASSETS" ]; then
@@ -601,6 +698,7 @@ install_awg_upx() {
       ;;
     reinstall)
       echo "📦 Переустановка awg-manager (force-reinstall)..."
+      warn_force_backup || return 0
       opkg install --force-reinstall "./$IPK_NAME" || opkg install "./$IPK_NAME"
       echo "✅ awg-manager переустановлен"
       ;;
@@ -662,13 +760,14 @@ install_awg_version_select() {
   echo "✅ Репозиторий: http://repo.hoaxisr.ru/$R"
 
   echo "→ Список релизов hoaxisr/awg-manager..."
-  API_JSON=$(fetch_text "https://api.github.com/repos/hoaxisr/awg-manager/releases?per_page=15" || true)
-  VERSIONS=$(echo "$API_JSON" | sed -n 's/.*"tag_name": "\([^"]*\)".*/\1/p' | grep -v '^latest$' | head -10)
+  API_JSON=$(fetch_github_api "https://api.github.com/repos/hoaxisr/awg-manager/releases?per_page=15" || true)
+  # Быстрый разбор тегов (как awgm-installer)
+  VERSIONS=$(echo "$API_JSON" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//g' | grep -v '^latest$' | head -12)
 
   if [ -z "$VERSIONS" ]; then
     echo "   API пуст, пробуем HTML..."
     HTML=$(fetch_text "https://github.com/hoaxisr/awg-manager/releases" || true)
-    VERSIONS=$(echo "$HTML" | grep -oE '/hoaxisr/awg-manager/releases/tag/v[0-9][^"<> ]+' | sed 's|.*/||' | sort -u | sort -Vr | head -10)
+    VERSIONS=$(echo "$HTML" | grep -oE '/hoaxisr/awg-manager/releases/tag/v[0-9][^"<> ]+' | sed 's|.*/||' | sort -u | sort -Vr | head -12)
   fi
 
   if [ -z "$VERSIONS" ]; then
@@ -686,25 +785,39 @@ install_awg_version_select() {
     i=$((i + 1))
   done < /tmp/awg-ver-list.$$
   max=$((i - 1))
+  echo "   (cN — changelog, напр. c2; 0 — в меню)"
 
-  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
-  if [ -z "$c" ]; then
-    ver=$(head -1 /tmp/awg-ver-list.$$)
-  elif [ "$c" = "0" ]; then
-    echo "→ главное меню"
-    rm -f /tmp/awg-ver-list.$$
-    return 2
-  elif echo "$c" | grep -qE '^[0-9]+$'; then
-    if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
-      ver=$(sed -n "${c}p" /tmp/awg-ver-list.$$)
-    else
-      echo "❌ Номер вне диапазона 1-$max (0 = в меню)"
+  ver=""
+  while true; do
+    c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
+    if [ -z "$c" ]; then
+      ver=$(head -1 /tmp/awg-ver-list.$$)
+      break
+    elif [ "$c" = "0" ]; then
+      echo "→ главное меню"
       rm -f /tmp/awg-ver-list.$$
-      return 1
+      return 2
+    elif echo "$c" | grep -q '^[cCсС][0-9][0-9]*$'; then
+      cl_num=$(echo "$c" | sed 's/[^0-9]//g')
+      cl_tag=$(sed -n "${cl_num}p" /tmp/awg-ver-list.$$)
+      if [ -n "$cl_tag" ]; then
+        show_changelog "$API_JSON" "$cl_tag"
+      else
+        echo "❌ Нет версии под номером $cl_num"
+      fi
+      continue
+    elif echo "$c" | grep -qE '^[0-9]+$'; then
+      if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
+        ver=$(sed -n "${c}p" /tmp/awg-ver-list.$$)
+        break
+      else
+        echo "❌ Номер вне диапазона 1-$max"
+      fi
+    else
+      ver="$c"
+      break
     fi
-  else
-    ver="$c"
-  fi
+  done
   rm -f /tmp/awg-ver-list.$$
   ver=${ver#v}
 
@@ -726,6 +839,7 @@ install_awg_version_select() {
   fi
 
   echo "📦 Установка $ipk_name ..."
+  warn_force_backup || { rm -f "./$ipk_name"; return 2; }
   if opkg install --force-downgrade "./$ipk_name"; then
     echo "🎉 Установлен awg-manager v$ver"
   else
@@ -752,8 +866,8 @@ install_awg_upx_version_select() {
   echo "✅ Архитектура: $A → $S"
 
   echo "→ Список релизов awg-manager (UPX) из ${REPO}..."
-  API_JSON=$(fetch_text "https://api.github.com/repos/${REPO}/releases?per_page=40" || true)
-  VERSIONS=$(echo "$API_JSON" | sed -n 's/.*"tag_name": "\(awgm-[^"]*\)".*/\1/p' | head -15)
+  API_JSON=$(fetch_github_api "https://api.github.com/repos/${REPO}/releases?per_page=40" || true)
+  VERSIONS=$(echo "$API_JSON" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//g' | grep '^awgm-' | head -15)
 
   if [ -z "$VERSIONS" ]; then
     echo "   API пуст, пробуем HTML..."
@@ -777,28 +891,42 @@ install_awg_upx_version_select() {
     i=$((i + 1))
   done < /tmp/awgm-upx-list.$$
   max=$((i - 1))
+  echo "   (cN — changelog, напр. c2; 0 — в меню)"
 
-  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
-  if [ -z "$c" ]; then
-    ver_tag=$(head -1 /tmp/awgm-upx-list.$$)
-  elif [ "$c" = "0" ]; then
-    echo "→ главное меню"
-    rm -f /tmp/awgm-upx-list.$$
-    return 2
-  elif echo "$c" | grep -qE '^[0-9]+$'; then
-    if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
-      ver_tag=$(sed -n "${c}p" /tmp/awgm-upx-list.$$)
-    else
-      echo "❌ Номер вне диапазона 1-$max (0 = в меню)"
+  ver_tag=""
+  while true; do
+    c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
+    if [ -z "$c" ]; then
+      ver_tag=$(head -1 /tmp/awgm-upx-list.$$)
+      break
+    elif [ "$c" = "0" ]; then
+      echo "→ главное меню"
       rm -f /tmp/awgm-upx-list.$$
-      return 1
+      return 2
+    elif echo "$c" | grep -q '^[cCсС][0-9][0-9]*$'; then
+      cl_num=$(echo "$c" | sed 's/[^0-9]//g')
+      cl_tag=$(sed -n "${cl_num}p" /tmp/awgm-upx-list.$$)
+      if [ -n "$cl_tag" ]; then
+        show_changelog "$API_JSON" "$cl_tag"
+      else
+        echo "❌ Нет версии под номером $cl_num"
+      fi
+      continue
+    elif echo "$c" | grep -qE '^[0-9]+$'; then
+      if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
+        ver_tag=$(sed -n "${c}p" /tmp/awgm-upx-list.$$)
+        break
+      else
+        echo "❌ Номер вне диапазона 1-$max"
+      fi
+    else
+      case "$c" in
+        awgm-*) ver_tag="$c" ;;
+        *)      ver_tag="awgm-$c" ;;
+      esac
+      break
     fi
-  else
-    case "$c" in
-      awgm-*) ver_tag="$c" ;;
-      *)      ver_tag="awgm-$c" ;;
-    esac
-  fi
+  done
   rm -f /tmp/awgm-upx-list.$$
 
   ver_disp=${ver_tag#awgm-}
@@ -818,6 +946,7 @@ install_awg_upx_version_select() {
   fi
 
   echo "📦 Установка $ipk_name ..."
+  warn_force_backup || { rm -f "./$ipk_name"; return 2; }
   if opkg install --force-reinstall "./$ipk_name" 2>/dev/null || opkg install --force-downgrade "./$ipk_name"; then
     echo "🎉 Установлен awg-manager $ver_disp (UPX)"
   else
@@ -847,8 +976,8 @@ install_sb_official_version_select() {
   echo "✅ Архитектура: $A → $SB_ARCH_SUFFIX"
 
   echo "→ Список релизов hoaxisr/amnezia-box..."
-  API_JSON=$(fetch_text "https://api.github.com/repos/hoaxisr/amnezia-box/releases?per_page=20" || true)
-  VERSIONS=$(echo "$API_JSON" | sed -n 's/.*"tag_name": "\([^"]*\)".*/\1/p' | grep -v '^latest$' | head -15)
+  API_JSON=$(fetch_github_api "https://api.github.com/repos/hoaxisr/amnezia-box/releases?per_page=20" || true)
+  VERSIONS=$(echo "$API_JSON" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//g' | grep -v '^latest$' | head -15)
 
   if [ -z "$VERSIONS" ]; then
     echo "   API пуст, пробуем HTML..."
@@ -871,25 +1000,39 @@ install_sb_official_version_select() {
     i=$((i + 1))
   done < /tmp/sb-off-list.$$
   max=$((i - 1))
+  echo "   (cN — changelog, напр. c2; 0 — в меню)"
 
-  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
-  if [ -z "$c" ]; then
-    ver_tag=$(head -1 /tmp/sb-off-list.$$)
-  elif [ "$c" = "0" ]; then
-    echo "→ главное меню"
-    rm -f /tmp/sb-off-list.$$
-    return 2
-  elif echo "$c" | grep -qE '^[0-9]+$'; then
-    if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
-      ver_tag=$(sed -n "${c}p" /tmp/sb-off-list.$$)
-    else
-      echo "❌ Номер вне диапазона 1-$max (0 = в меню)"
+  ver_tag=""
+  while true; do
+    c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
+    if [ -z "$c" ]; then
+      ver_tag=$(head -1 /tmp/sb-off-list.$$)
+      break
+    elif [ "$c" = "0" ]; then
+      echo "→ главное меню"
       rm -f /tmp/sb-off-list.$$
-      return 1
+      return 2
+    elif echo "$c" | grep -q '^[cCсС][0-9][0-9]*$'; then
+      cl_num=$(echo "$c" | sed 's/[^0-9]//g')
+      cl_tag=$(sed -n "${cl_num}p" /tmp/sb-off-list.$$)
+      if [ -n "$cl_tag" ]; then
+        show_changelog "$API_JSON" "$cl_tag"
+      else
+        echo "❌ Нет версии под номером $cl_num"
+      fi
+      continue
+    elif echo "$c" | grep -qE '^[0-9]+$'; then
+      if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
+        ver_tag=$(sed -n "${c}p" /tmp/sb-off-list.$$)
+        break
+      else
+        echo "❌ Номер вне диапазона 1-$max"
+      fi
+    else
+      ver_tag="$c"
+      break
     fi
-  else
-    ver_tag="$c"
-  fi
+  done
   rm -f /tmp/sb-off-list.$$
 
   ver_disp=${ver_tag#v}
@@ -955,8 +1098,8 @@ install_sb_version_select() {
   echo "✅ Архитектура: $A → $SB_ARCH_SUFFIX"
 
   echo "→ Список релизов sing-box (UPX) из rndnaame/awg-compressed..."
-  API_JSON=$(fetch_text "https://api.github.com/repos/${REPO}/releases?per_page=40" || true)
-  VERSIONS=$(echo "$API_JSON" | sed -n 's/.*"tag_name": "\(sb-[^"]*\)".*/\1/p' | head -15)
+  API_JSON=$(fetch_github_api "https://api.github.com/repos/${REPO}/releases?per_page=40" || true)
+  VERSIONS=$(echo "$API_JSON" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//g' | grep '^sb-' | head -15)
 
   if [ -z "$VERSIONS" ]; then
     echo "   API пуст, пробуем HTML..."
@@ -981,29 +1124,42 @@ install_sb_version_select() {
     i=$((i + 1))
   done < /tmp/sb-ver-list.$$
   max=$((i - 1))
+  echo "   (cN — changelog, напр. c2; 0 — в меню)"
 
-  c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
-  if [ -z "$c" ]; then
-    ver_tag=$(head -1 /tmp/sb-ver-list.$$)
-  elif [ "$c" = "0" ]; then
-    echo "→ главное меню"
-    rm -f /tmp/sb-ver-list.$$
-    return 2
-  elif echo "$c" | grep -qE '^[0-9]+$'; then
-    if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
-      ver_tag=$(sed -n "${c}p" /tmp/sb-ver-list.$$)
-    else
-      echo "❌ Номер вне диапазона 1-$max (0 = в меню)"
+  ver_tag=""
+  while true; do
+    c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
+    if [ -z "$c" ]; then
+      ver_tag=$(head -1 /tmp/sb-ver-list.$$)
+      break
+    elif [ "$c" = "0" ]; then
+      echo "→ главное меню"
       rm -f /tmp/sb-ver-list.$$
-      return 1
+      return 2
+    elif echo "$c" | grep -q '^[cCсС][0-9][0-9]*$'; then
+      cl_num=$(echo "$c" | sed 's/[^0-9]//g')
+      cl_tag=$(sed -n "${cl_num}p" /tmp/sb-ver-list.$$)
+      if [ -n "$cl_tag" ]; then
+        show_changelog "$API_JSON" "$cl_tag"
+      else
+        echo "❌ Нет версии под номером $cl_num"
+      fi
+      continue
+    elif echo "$c" | grep -qE '^[0-9]+$'; then
+      if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
+        ver_tag=$(sed -n "${c}p" /tmp/sb-ver-list.$$)
+        break
+      else
+        echo "❌ Номер вне диапазона 1-$max"
+      fi
+    else
+      case "$c" in
+        sb-*) ver_tag="$c" ;;
+        *)    ver_tag="sb-$c" ;;
+      esac
+      break
     fi
-  else
-    # пользователь ввёл версию без sb-
-    case "$c" in
-      sb-*) ver_tag="$c" ;;
-      *)    ver_tag="sb-$c" ;;
-    esac
-  fi
+  done
   rm -f /tmp/sb-ver-list.$$
 
   ver_disp=${ver_tag#sb-}
@@ -1092,8 +1248,7 @@ run_tunnel_access() {
 # main
 # ---------------------------------------------------------------------------
 main() {
-  echo "=== Установка compressed awg-manager + sing-box ==="
-  echo ""
+  print_banner
 
   detect_arch
   echo ""
