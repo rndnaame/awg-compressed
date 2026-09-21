@@ -1,0 +1,212 @@
+name: Update release notes (changelog)
+
+# Обновляет body у всех релизов awgm-*, sb-*, compressed
+# по новым правилам: официальный changelog + install-команда.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Только показать, что будет записано (не PATCH)"
+        type: boolean
+        default: false
+      only_tag:
+        description: "Обновить только один тег (пусто = все awgm-/sb-/compressed)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  update-notes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y jq
+
+      - name: Rewrite release bodies
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          ONLY_TAG: ${{ inputs.only_tag }}
+        run: |
+          set -e
+          OUR_REPO="${{ github.repository }}"
+          INSTALL_CMD="curl -sL https://raw.githubusercontent.com/${OUR_REPO}/main/install-compressed.sh | sh"
+          ROLLING_TAG="compressed"
+
+          api() {
+            # api METHOD PATH [data_file]
+            _method="$1"
+            _path="$2"
+            _data="${3:-}"
+            if [ -n "$_data" ]; then
+              curl -sL -X "$_method" \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "Content-Type: application/json" \
+                --data-binary @"$_data" \
+                "https://api.github.com/repos/${OUR_REPO}${_path}"
+            else
+              curl -sL -X "$_method" \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${OUR_REPO}${_path}"
+            fi
+          }
+
+          fetch_official_cl() {
+            _repo="$1"
+            _tag="$2"
+            _title="$3"
+            _url="https://github.com/${_repo}/releases/tag/${_tag}"
+            _json=$(curl -sL \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${_repo}/releases/tags/${_tag}" || true)
+            _body=$(echo "$_json" | jq -r '.body // empty' 2>/dev/null || true)
+            {
+              echo ""
+              echo "<details>"
+              echo "<summary>Changelog ${_title} (официальный)</summary>"
+              echo ""
+              if [ -n "$_body" ] && [ "$_body" != "null" ]; then
+                echo "$_body"
+                echo ""
+                echo "— Источник: ${_url}"
+              else
+                echo "Не удалось загрузить notes. Смотрите: ${_url}"
+              fi
+              echo ""
+              echo "</details>"
+            }
+          }
+
+          body_awg() {
+            _ver="$1"
+            {
+              echo "### v${_ver} (AWG-M UPX)"
+              echo ""
+              echo "UPX-сборка awg-manager. Актуальные файлы для установщика — в теге \`${ROLLING_TAG}\`."
+              echo ""
+              echo '```sh'
+              echo "$INSTALL_CMD"
+              echo '```'
+              fetch_official_cl "hoaxisr/awg-manager" "v${_ver}" "awg-manager v${_ver}"
+            }
+          }
+
+          body_sb() {
+            _ver="$1"
+            {
+              echo "### ${_ver} (sing-box UPX)"
+              echo ""
+              echo "UPX-сборка sing-box (amnezia-box). Актуальные файлы для установщика — в теге \`${ROLLING_TAG}\`."
+              echo ""
+              echo '```sh'
+              echo "$INSTALL_CMD"
+              echo '```'
+              fetch_official_cl "hoaxisr/amnezia-box" "${_ver}" "sing-box ${_ver}"
+            }
+          }
+
+          body_rolling() {
+            # версии из имён ассетов текущего compressed
+            _json="$1"
+            _awg=$(echo "$_json" | jq -r '.assets[].name' 2>/dev/null | grep -oE 'awg-manager_[^_]+' | head -1 | sed 's/awg-manager_//')
+            _sb=$(echo "$_json" | jq -r '.assets[].name' 2>/dev/null | grep -oE 'singbox-[^-]+(-[^-]+)*' | head -1 | sed 's/^singbox-//;s/-aarch64.*//;s/-mips.*//;s/_compressed$//')
+            # более надёжный разбор sing-box имени: singbox-VER-arch_compressed
+            _sb=$(echo "$_json" | jq -r '.assets[].name' 2>/dev/null | grep '^singbox-' | head -1 | sed -n 's/^singbox-\(.*\)-\(aarch64\|mipsel\|mips\)-.*/\1/p')
+            _awg_tag=""
+            _sb_tag=""
+            [ -n "$_awg" ] && _awg_tag=$(echo "awgm-${_awg}" | sed 's/[^a-zA-Z0-9._-]/-/g')
+            [ -n "$_sb" ] && _sb_tag=$(echo "sb-${_sb}" | sed 's/[^a-zA-Z0-9._-]/-/g')
+            {
+              echo "В этом релизе только **крайние** версии, сжатые UPX."
+              echo ""
+              [ -n "$_awg" ] && echo "- awg-manager: **v${_awg}** → топик \`${_awg_tag}\`"
+              [ -n "$_sb" ] && echo "- sing-box: **${_sb}** → топик \`${_sb_tag}\`"
+              echo ""
+              echo "История версий — в отдельных релизах \`awgm-*\` и \`sb-*\`."
+              echo ""
+              echo '```sh'
+              echo "$INSTALL_CMD"
+              echo '```'
+              [ -n "$_awg" ] && fetch_official_cl "hoaxisr/awg-manager" "v${_awg}" "awg-manager v${_awg}"
+              [ -n "$_sb" ] && fetch_official_cl "hoaxisr/amnezia-box" "${_sb}" "sing-box ${_sb}"
+            }
+          }
+
+          echo "== Список релизов =="
+          PAGE=1
+          : > /tmp/all_releases.jsonl
+          while true; do
+            CHUNK=$(api GET "/releases?per_page=100&page=${PAGE}")
+            N=$(echo "$CHUNK" | jq 'length')
+            [ "$N" -gt 0 ] || break
+            echo "$CHUNK" | jq -c '.[]' >> /tmp/all_releases.jsonl
+            [ "$N" -lt 100 ] && break
+            PAGE=$((PAGE + 1))
+          done
+          TOTAL=$(wc -l < /tmp/all_releases.jsonl)
+          echo "Найдено релизов: $TOTAL"
+
+          UPDATED=0
+          SKIPPED=0
+
+          while read -r row; do
+            [ -n "$row" ] || continue
+            TAG=$(echo "$row" | jq -r '.tag_name')
+            RID=$(echo "$row" | jq -r '.id')
+            NAME=$(echo "$row" | jq -r '.name // .tag_name')
+
+            if [ -n "$ONLY_TAG" ] && [ "$TAG" != "$ONLY_TAG" ]; then
+              continue
+            fi
+
+            NEW_BODY=""
+            case "$TAG" in
+              compressed)
+                NEW_BODY=$(body_rolling "$row")
+                ;;
+              awgm-*)
+                VER=${TAG#awgm-}
+                NEW_BODY=$(body_awg "$VER")
+                ;;
+              sb-*)
+                VER=${TAG#sb-}
+                NEW_BODY=$(body_sb "$VER")
+                ;;
+              *)
+                echo "  skip (чужой тег): $TAG"
+                SKIPPED=$((SKIPPED + 1))
+                continue
+                ;;
+            esac
+
+            echo ""
+            echo "---- $TAG ($NAME) id=$RID ----"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "(dry-run) body preview:"
+              echo "$NEW_BODY" | head -30
+              echo "..."
+              UPDATED=$((UPDATED + 1))
+              continue
+            fi
+
+            # JSON-escape body
+            echo "$NEW_BODY" | jq -Rs '{body: .}' > /tmp/patch.json
+            RESP=$(api PATCH "/releases/${RID}" /tmp/patch.json)
+            if echo "$RESP" | jq -e '.id' >/dev/null 2>&1; then
+              echo "  OK updated"
+              UPDATED=$((UPDATED + 1))
+            else
+              echo "  FAIL: $RESP"
+            fi
+            # не упираемся в rate limit
+            sleep 1
+          done < /tmp/all_releases.jsonl
+
+          echo ""
+          echo "=== Готово: обновлено $UPDATED, пропущено $SKIPPED ==="
