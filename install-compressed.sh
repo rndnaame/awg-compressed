@@ -73,7 +73,17 @@ hl_line() {
 print_banner() {
   clear 2>/dev/null || true
   printf '%b\n' "${light_blue}================================================${reset}"
-  printf '%b\n' "${light_blue}Интерактивный установщик AWG-Manager (Sing-Box)${reset}"
+  printf '%b\n' "${light_blue}  Интерактивный установщик AWG-Manager (Sing-Box)${reset}"
+  printf '%b\n' "${light_blue}================================================${reset}"
+  echo ""
+}
+
+# Подменю: clear + рамка (как у главного)
+print_submenu() {
+  _title="$1"
+  clear 2>/dev/null || true
+  printf '%b\n' "${light_blue}================================================${reset}"
+  printf '%b\n' "${light_blue}  ${_title}${reset}"
   printf '%b\n' "${light_blue}================================================${reset}"
   echo ""
 }
@@ -532,6 +542,15 @@ run_menu() {
 
   # Цикл главного меню: 0 — полный выход; в подменю 0 — возврат сюда
   while true; do
+    clear 2>/dev/null || true
+    printf '%b\n' "${light_blue}================================================${reset}"
+    printf '%b\n' "${light_blue}  Интерактивный установщик AWG-Manager (Sing-Box)${reset}"
+    printf '%b\n' "${light_blue}================================================${reset}"
+    echo ""
+    echo "✅ Архитектура: $A → $ARCH"
+    echo ""
+    show_installed
+    show_available
     printf '%b\n' "${yellow}Выбрать пакет для установки:${reset}"
     echo ""
     echo "  AWG-Manager"
@@ -546,7 +565,7 @@ run_menu() {
     echo "    [5]  Настроить доступ через туннель"
     echo "    [0]  выход"
     echo ""
-    choice=$(ask "Выбор [0-5], по умолчанию 1: " "1")
+    choice=$(ask "Выбор [0-5], Enter = выход: " "0")
     case "$choice" in
       1)
         # set -e: вызов в if, иначе return 2 (в меню) роняет скрипт
@@ -742,9 +761,7 @@ install_sb_upx() {
 
 # Пункт [1]: официальный IPK с выбором версии
 install_awg_version_select() {
-  echo ""
-  echo "=== Установка awg-manager (официальный · выбор версии) ==="
-  echo ""
+  print_submenu "AWG-Manager — официальная версия"
 
   S="$ARCH_SUFFIX"
   R="$ARCH_REPO"
@@ -775,7 +792,7 @@ install_awg_version_select() {
   fi
 
   echo ""
-  echo "🔢 Последние версии:"
+  printf "%b\n" "${light_blue}Доступные версии:${reset}"
   i=1
   echo "$VERSIONS" > /tmp/awg-ver-list.$$
   while read -r v; do
@@ -784,15 +801,12 @@ install_awg_version_select() {
     i=$((i + 1))
   done < /tmp/awg-ver-list.$$
   max=$((i - 1))
-  echo "   (cN — changelog, напр. c2; 0 — в меню)"
+  echo "   (cN — changelog, напр. c2; Enter/0 — в меню)"
 
   ver=""
   while true; do
-    c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
-    if [ -z "$c" ]; then
-      ver=$(head -1 /tmp/awg-ver-list.$$)
-      break
-    elif [ "$c" = "0" ]; then
+    c=$(ask "Номер (1-$max) или версия (Enter/0 = в меню): " "")
+    if [ -z "$c" ] || [ "$c" = "0" ]; then
       echo "→ главное меню"
       rm -f /tmp/awg-ver-list.$$
       return 2
@@ -853,9 +867,7 @@ install_awg_version_select() {
 
 # Пункт [2]: UPX awg-manager с выбором версии (из топиков awgm-*)
 install_awg_upx_version_select() {
-  echo ""
-  echo "=== Установка awg-manager (UPX · выбор версии) ==="
-  echo ""
+  print_submenu "AWG-Manager — UPX версия (сжатая)"
 
   S="$ARCH_SUFFIX"
   if [ -z "$S" ]; then
@@ -880,7 +892,7 @@ install_awg_upx_version_select() {
   fi
 
   echo ""
-  echo "🔢 Доступные версии (новые сверху):"
+  printf "%b\n" "${light_blue}Доступные версии:${reset}"
   i=1
   echo "$VERSIONS" > /tmp/awgm-upx-list.$$
   while read -r v; do
@@ -890,15 +902,12 @@ install_awg_upx_version_select() {
     i=$((i + 1))
   done < /tmp/awgm-upx-list.$$
   max=$((i - 1))
-  echo "   (cN — changelog, напр. c2; 0 — в меню)"
+  echo "   (cN — changelog, напр. c2; Enter/0 — в меню)"
 
   ver_tag=""
   while true; do
-    c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
-    if [ -z "$c" ]; then
-      ver_tag=$(head -1 /tmp/awgm-upx-list.$$)
-      break
-    elif [ "$c" = "0" ]; then
+    c=$(ask "Номер (1-$max) или версия (Enter/0 = в меню): " "")
+    if [ -z "$c" ] || [ "$c" = "0" ]; then
       echo "→ главное меню"
       rm -f /tmp/awgm-upx-list.$$
       return 2
@@ -959,9 +968,7 @@ install_awg_upx_version_select() {
 
 # Пункт [3]: официальный sing-box с выбором версии (hoaxisr/amnezia-box)
 install_sb_official_version_select() {
-  echo ""
-  echo "=== Установка sing-box (официальный · выбор версии) ==="
-  echo ""
+  print_submenu "Sing-Box — официальная версия"
 
   case "$ARCH" in
     aarch64) SB_ARCH_SUFFIX="aarch64-3.10" ;;
@@ -990,7 +997,7 @@ install_sb_official_version_select() {
   fi
 
   echo ""
-  echo "🔢 Доступные версии (новые сверху):"
+  printf "%b\n" "${light_blue}Доступные версии:${reset}"
   i=1
   echo "$VERSIONS" > /tmp/sb-off-list.$$
   while read -r v; do
@@ -999,15 +1006,12 @@ install_sb_official_version_select() {
     i=$((i + 1))
   done < /tmp/sb-off-list.$$
   max=$((i - 1))
-  echo "   (cN — changelog, напр. c2; 0 — в меню)"
+  echo "   (cN — changelog, напр. c2; Enter/0 — в меню)"
 
   ver_tag=""
   while true; do
-    c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
-    if [ -z "$c" ]; then
-      ver_tag=$(head -1 /tmp/sb-off-list.$$)
-      break
-    elif [ "$c" = "0" ]; then
+    c=$(ask "Номер (1-$max) или версия (Enter/0 = в меню): " "")
+    if [ -z "$c" ] || [ "$c" = "0" ]; then
       echo "→ главное меню"
       rm -f /tmp/sb-off-list.$$
       return 2
@@ -1080,9 +1084,7 @@ install_sb_official_version_select() {
 
 # Пункт [4]: UPX sing-box с выбором версии (из топиков sb-*)
 install_sb_version_select() {
-  echo ""
-  echo "=== Установка sing-box (UPX · выбор версии) ==="
-  echo ""
+  print_submenu "Sing-Box — UPX версия (сжатая)"
 
   # ARCH уже определён в detect_arch: aarch64 / mipsel / mips
   case "$ARCH" in
@@ -1112,7 +1114,7 @@ install_sb_version_select() {
   fi
 
   echo ""
-  echo "🔢 Доступные версии (новые сверху):"
+  printf "%b\n" "${light_blue}Доступные версии:${reset}"
   i=1
   echo "$VERSIONS" > /tmp/sb-ver-list.$$
   while read -r v; do
@@ -1123,15 +1125,12 @@ install_sb_version_select() {
     i=$((i + 1))
   done < /tmp/sb-ver-list.$$
   max=$((i - 1))
-  echo "   (cN — changelog, напр. c2; 0 — в меню)"
+  echo "   (cN — changelog, напр. c2; Enter/0 — в меню)"
 
   ver_tag=""
   while true; do
-    c=$(ask "Номер (1-$max) или версия (Enter = последняя, 0 = в меню): " "")
-    if [ -z "$c" ]; then
-      ver_tag=$(head -1 /tmp/sb-ver-list.$$)
-      break
-    elif [ "$c" = "0" ]; then
+    c=$(ask "Номер (1-$max) или версия (Enter/0 = в меню): " "")
+    if [ -z "$c" ] || [ "$c" = "0" ]; then
       echo "→ главное меню"
       rm -f /tmp/sb-ver-list.$$
       return 2
@@ -1209,7 +1208,7 @@ install_sb_version_select() {
 # Пункт [5]: доступ через туннель (встроено, без скачивания)
 run_tunnel_access() {
   echo ""
-  echo "=== Настройка доступа через туннель ==="
+  print_submenu "Доступ через туннель (WG / ZeroTier)"
   echo ""
 
   TUN_TMP="/tmp/awg-manager-tunnel-access.$$.sh"
@@ -1968,9 +1967,11 @@ restore_all() {
 
 show_status() {
     port="$(get_server_port)"
-
+    clear 2>/dev/null || true
+    printf '%b\n' "\033[96m================================================\033[0m"
+    printf '%b\n' "\033[96m  Текущая конфигурация\033[0m"
+    printf '%b\n' "\033[96m================================================\033[0m"
     say ""
-    say "=== Состояние ==="
     show_wg_list
 
     say ""
@@ -2003,34 +2004,48 @@ show_status() {
 
 menu() {
     empty_streak=0
+    light_blue="\033[96m"
+    yellow="\033[93m"
+    reset="\033[0m"
     while :; do
+        clear 2>/dev/null || true
+        printf '%b\n' "${light_blue}================================================${reset}"
+        printf '%b\n' "${light_blue}  Доступ через туннель (WG / ZeroTier)${reset}"
+        printf '%b\n' "${light_blue}================================================${reset}"
         say ""
-        say "========================================"
-        say " AWG Manager — доступ через туннель"
-        say "========================================"
+        printf '%b\n' "${yellow}Выберите действие:${reset}"
         say ""
-        say "1. Настроить доступ через туннель (WG / ZeroTier)"
-        say "2. Вернуть ВСЁ как было"
-        say "3. Показать текущую конфигурацию"
-        say "0. Выход"
+        say "  [1]  Настроить доступ через туннель"
+        say "  [2]  Вернуть ВСЁ как было"
+        say "  [3]  Показать текущую конфигурацию"
+        say "  [0]  выход"
         say ""
 
-        if ! read_tty "Выберите [0-3]: " choice; then
+        if ! read_tty "Выберите [0-3], Enter = выход: " choice; then
             say "Нет ввода (EOF) — выход."
             exit 0
         fi
 
         case "$choice" in
-            1) empty_streak=0; configure_access ;;
-            2) empty_streak=0; restore_all ;;
-            3) empty_streak=0; show_status ;;
-            0) exit 0 ;;
-            "")
-                empty_streak=$((empty_streak + 1))
-                if [ "$empty_streak" -ge 3 ]; then
-                    say "Повторный пустой ввод — выход."
-                    exit 0
-                fi
+            1)
+                empty_streak=0
+                configure_access
+                read_tty "Нажмите Enter для возврата в меню... " _
+                ;;
+            2)
+                empty_streak=0
+                restore_all
+                read_tty "Нажмите Enter для возврата в меню... " _
+                ;;
+            3)
+                empty_streak=0
+                show_status
+                say ""
+                read_tty "Нажмите Enter для возврата в меню... " _
+                ;;
+            0|"")
+                # Enter / 0 — выход в основное меню установщика
+                exit 0
                 ;;
             *)
                 empty_streak=0
@@ -2075,9 +2090,8 @@ main() {
   detect_arch
   echo ""
   detect_installed
-  show_installed
   fetch_release_assets
-  show_available
+  # show_installed / show_available — внутри run_menu (после clear)
   run_menu
 
   if [ "$DO_AWG" != "1" ] && [ "$DO_SB" != "1" ]; then
