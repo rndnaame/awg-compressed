@@ -360,6 +360,44 @@ warn_force_backup() {
   return 0
 }
 
+# Установка IPK awg-manager с умным выбором opkg-флагов.
+# $1 = путь к .ipk, $2 = целевая версия (без v)
+# missing / upgrade → opkg install
+# same              → --force-reinstall (+ warn)  — только при совпадении версии
+# downgrade         → --force-downgrade (+ warn)
+install_awg_ipk() {
+  _ipk="$1"
+  _new="$2"
+  _cur=$(opkg list-installed 2>/dev/null | awk '/^awg-manager /{print $3; exit}')
+
+  if [ -z "$_cur" ]; then
+    echo "📦 Установка awg-manager $_new ..."
+    opkg install "./$_ipk"
+    return $?
+  fi
+
+  if [ "$_cur" = "$_new" ]; then
+    echo "📦 Переустановка той же версии $_new ..."
+    warn_force_backup || return 2
+    opkg install --force-reinstall "./$_ipk"
+    return $?
+  fi
+
+  _cmp=$(ver_cmp "$_new" "$_cur")
+  if [ "$_cmp" = "1" ]; then
+    # new > cur — обычное обновление, без force
+    echo "📦 Обновление awg-manager: $_cur → $_new ..."
+    opkg install "./$_ipk"
+    return $?
+  fi
+
+  # new < cur — откат
+  echo "📦 Откат awg-manager: $_cur → $_new ..."
+  warn_force_backup || return 2
+  opkg install --force-downgrade "./$_ipk"
+  return $?
+}
+
 # ---------------------------------------------------------------------------
 # Архитектура и установленные версии
 # ---------------------------------------------------------------------------
@@ -709,15 +747,15 @@ install_awg_upx() {
       if opkg install "./$IPK_NAME"; then
         echo "✅ awg-manager: $CUR_AWG → $NEW_AWG"
       else
-        echo "⚠ opkg install не удался, пробуем --force-reinstall..."
-        opkg install --force-reinstall "./$IPK_NAME"
-        echo "✅ awg-manager установлен (force)"
+        echo "⚠️ opkg install не удался"
+        return 1
       fi
       ;;
     reinstall)
+      # только при совпадении версии
       echo "📦 Переустановка awg-manager (force-reinstall)..."
       warn_force_backup || return 0
-      opkg install --force-reinstall "./$IPK_NAME" || opkg install "./$IPK_NAME"
+      opkg install --force-reinstall "./$IPK_NAME"
       echo "✅ awg-manager переустановлен"
       ;;
   esac
@@ -851,11 +889,11 @@ install_awg_version_select() {
     fi
   fi
 
-  echo "📦 Установка $ipk_name ..."
-  warn_force_backup || { rm -f "./$ipk_name"; return 2; }
-  if opkg install --force-downgrade "./$ipk_name"; then
+  if install_awg_ipk "$ipk_name" "$ver"; then
     echo "🎉 Установлен awg-manager v$ver"
   else
+    _rc=$?
+    [ "$_rc" = "2" ] && { rm -f "./$ipk_name"; return 2; }
     echo "⚠️ Ошибка установки"
     rm -f "./$ipk_name"
     return 1
@@ -953,11 +991,11 @@ install_awg_upx_version_select() {
     return 1
   fi
 
-  echo "📦 Установка $ipk_name ..."
-  warn_force_backup || { rm -f "./$ipk_name"; return 2; }
-  if opkg install --force-reinstall "./$ipk_name" 2>/dev/null || opkg install --force-downgrade "./$ipk_name"; then
+  if install_awg_ipk "$ipk_name" "$ver_disp"; then
     echo "🎉 Установлен awg-manager $ver_disp (UPX)"
   else
+    _rc=$?
+    [ "$_rc" = "2" ] && { rm -f "./$ipk_name"; return 2; }
     echo "⚠️ Ошибка установки"
     rm -f "./$ipk_name"
     return 1
