@@ -22,6 +22,16 @@ TMP="/tmp/awg-compressed-install"
 SINGBOX_DIR="/opt/etc/awg-manager/singbox"
 DEFAULT_IFACES="nwg0 nwg1 t2s0 t2s1 opkgtun10 awgm0 __default__"
 
+# Уборка хвостов в /tmp при любом выходе (меню, Ctrl+C, ошибка)
+cleanup_tmp() {
+  rm -rf "$TMP" 2>/dev/null || true
+  rm -f /tmp/awg-ver-list.$$ /tmp/awgm-upx-list.$$ /tmp/sb-off-list.$$ /tmp/sb-ver-list.$$ 2>/dev/null || true
+  rm -f /tmp/awg-manager-tunnel-access.*.sh 2>/dev/null || true
+  # хвосты от прошлых запусков (другие PID)
+  rm -f /tmp/awg-ver-list.* /tmp/awgm-upx-list.* /tmp/sb-off-list.* /tmp/sb-ver-list.* 2>/dev/null || true
+}
+trap cleanup_tmp EXIT INT TERM
+
 # ---------------------------------------------------------------------------
 # UI (цвета как у awgm-installer; NO_COLOR=1 — без ANSI)
 # ---------------------------------------------------------------------------
@@ -135,8 +145,8 @@ iface_ip() {
   ip -4 -o addr show dev "$1" 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1
 }
 
-# GitHub HTTP-прокси (быстрый fallback, как в awgm-installer)
-GH_PROXIES="https://gh-proxy.com/ https://ghfast.top/"
+# GitHub HTTP-зеркала/прокси (префикс к URL)
+GH_PROXIES="https://gh-proxy.com/ https://ghfast.top/ https://mirror.ghproxy.com/ https://github.moeyy.xyz/"
 
 # Скачать URL → OUT через curl/wget [iface] [proxy_prefix]
 # $1=url $2=out $3=try_secs $4=curl_iface $5=wget_bind $6=proxy_prefix
@@ -161,11 +171,13 @@ _dl_once() {
 }
 
 # download_file URL OUT [min_bytes]
+# Порядок: 1) напрямую → 2) зеркала GitHub → 3) туннель-интерфейсы
 download_file() {
   url="$1"
   out="$2"
   min_size="${3:-1000}"
   try_secs="${DL_TIMEOUT:-45}"
+  direct_secs="${DL_DIRECT_TIMEOUT:-20}"
 
   out_dir=$(dirname "$out")
   [ -n "$out_dir" ] && [ "$out_dir" != "." ] && mkdir -p "$out_dir" 2>/dev/null || true
@@ -187,41 +199,25 @@ download_file() {
     [ "$(wc -c < "$out" 2>/dev/null || echo 0)" -ge "$min_size" ]
   }
 
-  for iface in $ifaces; do
-    if [ "$iface" = "__default__" ]; then
-      label="default"
-      curl_iface=""
-      wget_bind=""
-    else
-      if ! iface_exists "$iface"; then
-        echo "   ⏭  $iface — нет интерфейса"
-        continue
-      fi
-      label="$iface"
-      curl_iface="--interface $iface"
-      _ip=$(iface_ip "$iface")
-      [ -n "$_ip" ] && wget_bind="--bind-address=$_ip" || wget_bind=""
+  # 1) Напрямую (без привязки к iface)
+  echo "   ↻ напрямую (макс ${direct_secs}с) ..."
+  if _dl_once "$url" "$out" "$direct_secs" "" "" ""; then
+    if try_ok; then
+      echo "   ✓ напрямую ($(du -h "$out" | awk '{print $1}'))"
+      return 0
     fi
+  fi
+  rm -f "$out"
 
-    echo "   ↻ через $label (макс ${try_secs}с) ..."
-    if _dl_once "$url" "$out" "$try_secs" "$curl_iface" "$wget_bind" ""; then
-      if try_ok; then
-        echo "   ✓ $label ($(du -h "$out" | awk '{print $1}'))"
-        return 0
-      fi
-    fi
-    rm -f "$out"
-  done
-
-  # HTTP-прокси GitHub (после интерфейсов)
+  # 2) HTTP-зеркала GitHub
   case "$url" in
-    https://github.com/*|https://api.github.com/*|https://raw.githubusercontent.com/*)
+    https://github.com/*|https://api.github.com/*|https://raw.githubusercontent.com/*|https://objects.githubusercontent.com/*)
       for px in $GH_PROXIES; do
         px_label=$(echo "$px" | sed 's|https://||;s|/$||')
-        echo "   ↻ proxy $px_label (макс ${try_secs}с) ..."
+        echo "   ↻ зеркало $px_label (макс ${try_secs}с) ..."
         if _dl_once "$url" "$out" "$try_secs" "" "" "$px"; then
           if try_ok; then
-            echo "   ✓ proxy/$px_label ($(du -h "$out" | awk '{print $1}'))"
+            echo "   ✓ зеркало/$px_label ($(du -h "$out" | awk '{print $1}'))"
             return 0
           fi
         fi
@@ -229,6 +225,28 @@ download_file() {
       done
       ;;
   esac
+
+  # 3) Туннель-интерфейсы (nwg0, t2s0, …) — в конце
+  for iface in $ifaces; do
+    [ "$iface" = "__default__" ] && continue
+    if ! iface_exists "$iface"; then
+      echo "   ⏭  $iface — нет интерфейса"
+      continue
+    fi
+    label="$iface"
+    curl_iface="--interface $iface"
+    _ip=$(iface_ip "$iface")
+    [ -n "$_ip" ] && wget_bind="--bind-address=$_ip" || wget_bind=""
+
+    echo "   ↻ туннель $label (макс ${try_secs}с) ..."
+    if _dl_once "$url" "$out" "$try_secs" "$curl_iface" "$wget_bind" ""; then
+      if try_ok; then
+        echo "   ✓ туннель/$label ($(du -h "$out" | awk '{print $1}'))"
+        return 0
+      fi
+    fi
+    rm -f "$out"
+  done
 
   echo "   ✗ не удалось скачать"
   return 1
@@ -2157,9 +2175,7 @@ main() {
   echo "=== Готово ($ARCH) ==="
   [ "$DO_AWG" = "1" ] && echo "   awg-manager: $NEW_AWG ($AWG_MODE)"
   [ "$DO_SB" = "1" ] && echo "   sing-box:    ${NEW_SB:-ok} ($SB_MODE)"
-
-  rm -rf "$TMP"
-  echo "Временные файлы удалены."
+  # cleanup_tmp сработает по trap EXIT
 }
 
 main "$@"
