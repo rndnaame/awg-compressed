@@ -1336,6 +1336,16 @@ say() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
 die() { warn "ОШИБКА: $*"; exit 1; }
 
+# Цвета (NO_COLOR=1 — без ANSI)
+green="\033[92m"
+red="\033[91m"
+yellow="\033[93m"
+light_blue="\033[96m"
+reset="\033[0m"
+if [ -n "$NO_COLOR" ]; then
+  green=""; red=""; yellow=""; light_blue=""; reset=""
+fi
+
 
 # Интерактивный ввод всегда с /dev/tty (иначе при curl|sh меню читает мусор/пустоту).
 read_tty() {
@@ -1884,9 +1894,9 @@ configure_access() {
     say "  Было:      security-level $SEL_SEC"
     say "  Linux:     $SEL_LINUX"
     say ""
-    say "security-level private снимает изоляцию интерфейса целиком, а не"
-    say "только порт $port: с той стороны туннеля станут доступны все службы,"
-    say "слушающие на 0.0.0.0. После настройки проверь: netstat -lnt"
+    printf '%b\n' "${green}security-level${reset} ${yellow}private${reset} снимает изоляцию интерфейса целиком, а не"
+    printf '%b\n' "только порт $port: ${red}с той стороны туннеля станут доступны все службы,${reset}"
+    printf '%b\n' "${red}слушающие на 0.0.0.0.${reset} После настройки проверь: netstat -lnt"
     say ""
 
     printf "Продолжить? [y/N]: "
@@ -1934,7 +1944,9 @@ configure_access() {
     say ""
     wait_for_port "$SEL_IP" "$port"
     case "$?" in
-        0) say "OK: AWG Manager слушает порт $port" ;;
+        0)
+            printf '%b\n' "${green}OK: AWG Manager слушает порт ${red}${port}${reset}"
+            ;;
         1) say "ПРЕДУПРЕЖДЕНИЕ: порт $port не обнаружен в LISTEN за $PORT_WAIT_SECONDS секунд."
            say "Проверь: netstat -lnt | grep $port" ;;
         2) : ;;  # already warned inside wait_for_port
@@ -1942,7 +1954,7 @@ configure_access() {
 
     say ""
     say "Адрес AWG Manager:"
-    say "  http://$SEL_IP:$port"
+    printf '%b\n' "  ${yellow}http://${SEL_IP}:${port}${reset}"
     say ""
     say "Точка отката сохранена в:"
     say "  $FULL_SETTINGS"
