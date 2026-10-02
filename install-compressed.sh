@@ -2033,27 +2033,94 @@ restore_all() {
     return 0
 }
 
+# IP интерфейса (первый IPv4) или пусто
+iface_ipv4() {
+    ip -4 -o addr show dev "$1" 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1
+}
+
+# По IP и списку ifaces найти имя интерфейса; primary — запасной
+resolve_listen_iface() {
+    _lip="$1"
+    _primary="$2"
+    shift 2
+    # все / 0.0.0.0 / IPv6 any / loopback → primary
+    case "$_lip" in
+        0.0.0.0|127.0.0.1|::|::1|'')
+            printf '%s\n' "$_primary"
+            return 0
+            ;;
+    esac
+    for _if in "$@"; do
+        [ -n "$_if" ] || continue
+        _ip=$(iface_ipv4 "$_if")
+        [ "$_ip" = "$_lip" ] && { printf '%s\n' "$_if"; return 0; }
+    done
+    # не нашли — primary
+    printf '%s\n' "$_primary"
+}
+
 show_status() {
     port="$(get_server_port)"
+    primary="$(jq -r '.server.interface // "br0"' "$AWG_SETTINGS" 2>/dev/null)"
+    [ -n "$primary" ] && [ "$primary" != "null" ] || primary="br0"
+
+    # .server.interfaces — массив доп. интерфейсов (может отсутствовать)
+    extra="$(jq -r '(.server.interfaces // []) | .[]' "$AWG_SETTINGS" 2>/dev/null)"
+
     clear 2>/dev/null || true
-    printf '%b\n' "\033[96m================================================\033[0m"
-    printf '%b\n' "\033[96m  Текущая конфигурация\033[0m"
-    printf '%b\n' "\033[96m================================================\033[0m"
+    printf '%b\n' "${light_blue}================================================${reset}"
+    printf '%b\n' "${light_blue}  Текущая конфигурация${reset}"
+    printf '%b\n' "${light_blue}================================================${reset}"
     say ""
     show_wg_list
 
     say ""
-    say "AWG Manager: порт $port, interfaces $(jq -c '.server.interfaces' "$AWG_SETTINGS" 2>/dev/null)"
+    say "AWG Manager сейчас слушает:"
 
+    _printed=0
     if command -v netstat >/dev/null 2>&1; then
-        listen="$(netstat -lnt 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" {print $4}')"
+        # local address column: 0.0.0.0:8080, 10.0.130.4:8080, :::8080
+        listen="$(netstat -lnt 2>/dev/null | awk -v p=":$port" '
+            $4 ~ p"$" {
+                a=$4
+                sub(/:[0-9]+$/, "", a)
+                if (a == ":::" || a == "::") a="0.0.0.0"
+                print a
+            }')"
         if [ -n "$listen" ]; then
-            say "  LISTEN: $(printf '%s' "$listen" | tr '\n' ' ')"
-        else
-            say "  LISTEN на порту $port не найден"
+            # shellcheck disable=SC2086
+            set -- $extra
+            echo "$listen" | sort -u | while read -r lip; do
+                [ -n "$lip" ] || continue
+                iname=$(resolve_listen_iface "$lip" "$primary" $extra)
+                printf '                  %s:%s ("%b%s%b")\n' \
+                    "$lip" "$port" "${green}" "$iname" "${reset}"
+                _printed=1
+            done
+            _printed=1
         fi
-    else
-        say "  (netstat недоступен)"
+    fi
+
+    if [ "$_printed" = "0" ]; then
+        # нет netstat / нет LISTEN — показать по конфигу
+        if [ -n "$extra" ]; then
+            echo "$extra" | while read -r iname; do
+                [ -n "$iname" ] || continue
+                ip4=$(iface_ipv4 "$iname")
+                [ -n "$ip4" ] || ip4="?"
+                printf '                  %s:%s ("%b%s%b")\n' \
+                    "$ip4" "$port" "${green}" "$iname" "${reset}"
+            done
+        fi
+        pip=$(iface_ipv4 "$primary")
+        [ -n "$pip" ] || pip="0.0.0.0"
+        printf '                  %s:%s ("%b%s%b")\n' \
+            "$pip" "$port" "${green}" "$primary" "${reset}"
+        if ! command -v netstat >/dev/null 2>&1; then
+            say "  (netstat недоступен — по данным settings.json)"
+        else
+            say "  (LISTEN на порту $port не найден — по данным settings.json)"
+        fi
     fi
 
     say ""
