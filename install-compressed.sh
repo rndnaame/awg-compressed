@@ -1476,6 +1476,69 @@ get_server_port() {
     esac
 }
 
+# Записать .server.port (число) в settings.json
+set_server_port() {
+    _newport="$1"
+    case "$_newport" in
+        ''|*[!0-9]*) warn "некорректный порт: $_newport"; return 1 ;;
+    esac
+    if [ "$_newport" -lt 1 ] || [ "$_newport" -gt 65535 ]; then
+        warn "порт вне диапазона 1–65535: $_newport"
+        return 1
+    fi
+    jq --argjson p "$_newport" '.server.port = $p' \
+        "$AWG_SETTINGS" > "$TMP_SETTINGS" 2>/dev/null || {
+        rm -f "$TMP_SETTINGS"
+        warn "не удалось изменить .server.port"
+        return 1
+    }
+    commit_settings "$TMP_SETTINGS" || return 1
+    return 0
+}
+
+# Кто слушает порт: free | awg | other
+# awg = процесс awg-manager, либо это уже текущий порт AWG
+port_owner() {
+    _p="$1"
+    _cur_awg_port="${2:-}"
+
+    # Есть ли LISTEN на порту?
+    if ! netstat -lnt 2>/dev/null | awk -v p=":$_p" '$4 ~ p"$" { found=1 } END { exit !found }'; then
+        echo "free"
+        return 0
+    fi
+
+    # Имя процесса (netstat -p / ss -p, если доступны)
+    _proc=""
+    _np=$(netstat -lntp 2>/dev/null | awk -v p=":$_p" '
+        $4 ~ p"$" {
+            for (i = 1; i <= NF; i++)
+                if ($i ~ /^[0-9]+\//) { print $i; exit }
+        }')
+    [ -n "$_np" ] && _proc="$_np"
+
+    if [ -z "$_proc" ] && command -v ss >/dev/null 2>&1; then
+        _proc=$(ss -lntp 2>/dev/null | grep -E ":$_p\\b" | head -1 | \
+            sed -n 's/.*"\([^"]*\)".*/\1/p')
+    fi
+
+    case "$_proc" in
+        *awg-manager*|*awg_manager*)
+            echo "awg"
+            return 0
+            ;;
+    esac
+
+    # Уже текущий порт AWG Manager
+    if [ -n "$_cur_awg_port" ] && [ "$_p" = "$_cur_awg_port" ]; then
+        echo "awg"
+        return 0
+    fi
+
+    echo "other"
+    return 0
+}
+
 # Returns 0 (true) if iface is already present in .server.interfaces
 interface_present() {
     iface="$1"
@@ -1906,6 +1969,59 @@ configure_access() {
         *) say "Отменено."; return 0 ;;
     esac
 
+    # Смена порта (Enter — оставить текущий); занятый чужим процессом — спросить снова
+    CUR_PORT="$port"
+    PORT_CHANGED=0
+    while :; do
+        say ""
+        printf "Порт AWG Manager [%s], Enter = оставить: " "$CUR_PORT"
+        if ! read_tty "" new_port; then new_port=""; fi
+
+        if [ -z "$new_port" ]; then
+            port="$CUR_PORT"
+            PORT_CHANGED=0
+            break
+        fi
+
+        case "$new_port" in
+            *[!0-9]*)
+                say "Некорректный порт, введите число 1–65535 или Enter."
+                continue
+                ;;
+        esac
+        if [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
+            say "Порт вне 1–65535, попробуйте ещё раз."
+            continue
+        fi
+
+        if [ "$new_port" = "$CUR_PORT" ]; then
+            port="$CUR_PORT"
+            PORT_CHANGED=0
+            break
+        fi
+
+        _who=$(port_owner "$new_port" "$CUR_PORT")
+        case "$_who" in
+            free)
+                say "Порт $new_port свободен."
+                port="$new_port"
+                PORT_CHANGED=1
+                break
+                ;;
+            awg)
+                say "Порт $new_port уже использует AWG Manager — ок."
+                port="$new_port"
+                PORT_CHANGED=1
+                break
+                ;;
+            other)
+                say "Порт $new_port занят другим приложением. Укажите другой или Enter."
+                continue
+                ;;
+        esac
+    done
+    [ "$PORT_CHANGED" = "1" ] && say "Порт будет изменён: $CUR_PORT → $port"
+
     ensure_backup || return 1
 
     # Снимок непосредственно перед изменением — нужен для отката шага 1,
@@ -1913,16 +2029,27 @@ configure_access() {
     before="$BACKUP_ROOT/settings.before.$SEL_NAME.json"
     cp -p "$AWG_SETTINGS" "$before" 2>/dev/null
 
-    say "[1/4] Добавляю $SEL_LINUX в AWG Manager (.server.interfaces)..."
+    step=1
+    total=4
+    [ "$PORT_CHANGED" = "1" ] && total=5
+
+    if [ "$PORT_CHANGED" = "1" ]; then
+        say "[$step/$total] Меняю порт AWG Manager → $port ..."
+        set_server_port "$port" || return 1
+        step=$((step + 1))
+    fi
+
+    say "[$step/$total] Добавляю $SEL_LINUX в AWG Manager (.server.interfaces)..."
     add_interface_to_awg "$SEL_LINUX" || return 1
+    step=$((step + 1))
 
     case "$SEL_NAME" in
         zt[0-9]*|nwg[0-9]*)
             # Уже linux-имя (например zt0 из ip link) — security-level в ndmc не трогаем
-            say "[2/4] security-level: пропуск (интерфейс $SEL_NAME без ndmc-имени)"
+            say "[$step/$total] security-level: пропуск (интерфейс $SEL_NAME без ndmc-имени)"
             ;;
         *)
-            say "[2/4] Устанавливаю $SEL_NAME = private..."
+            say "[$step/$total] Устанавливаю $SEL_NAME = private..."
             if ! set_security_level "$SEL_NAME" "private"; then
                 say "Откатываю изменение settings.json..."
                 if [ -f "$before" ] && cp -p "$before" "$AWG_SETTINGS"; then
@@ -1934,11 +2061,13 @@ configure_access() {
             fi
             ;;
     esac
+    step=$((step + 1))
 
-    say "[3/4] Сохраняю конфигурацию Keenetic..."
+    say "[$step/$total] Сохраняю конфигурацию Keenetic..."
     save_keenetic || say "ПРЕДУПРЕЖДЕНИЕ: конфигурация не сохранена, изменения пропадут после перезагрузки."
+    step=$((step + 1))
 
-    say "[4/4] Перезапускаю AWG Manager..."
+    say "[$step/$total] Перезапускаю AWG Manager..."
     restart_awg
 
     say ""
