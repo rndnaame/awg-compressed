@@ -585,13 +585,79 @@ write_sb_meta() {
 # ---------------------------------------------------------------------------
 # Релиз compressed
 # ---------------------------------------------------------------------------
-# Свободное место на /opt (КБ); 0 если неизвестно
+# Свободное место (КБ) для /opt; пусто если неизвестно.
+# Keenetic/BusyBox df: колонка Type сдвигает Available на $5; размеры могут быть 66.5M.
+# DEBUG_DF=1 — сырой df в stderr
 get_free_kb() {
-  _kb=$(df -k /opt 2>/dev/null | awk 'NR==2 && $4 ~ /^[0-9]+$/ {print $4; exit}')
+  _df_to_kb() {
+    # stdin: вывод df; stdout: килобайты или пусто
+    awk '
+      BEGIN { avail_col = 0 }
+      NR == 1 {
+        for (i = 1; i <= NF; i++) {
+          if ($i == "Available" || $i == "Avail") avail_col = i
+        }
+        # без заголовка: если есть Type (поле 2 не число и не /) — Available = 5, иначе 4
+        if (avail_col == 0) next
+        next
+      }
+      {
+        if (avail_col == 0) {
+          # эвристика: Type присутствует если $2 ~ /[a-z]/ и $3 похож на размер
+          if ($2 ~ /^[a-zA-Z]/ && $3 ~ /^[0-9]/) col = 5
+          else col = 4
+        } else col = avail_col
+        v = $col
+        if (v == "" || v == "-") next
+        if (v ~ /^[0-9]+$/) { print v; exit }
+        if (match(v, /^[0-9]+(\.[0-9]+)?[KkMmGgTt]/)) {
+          n = v + 0
+          u = v
+          gsub(/[0-9.]/, "", u)
+          if (u ~ /[Kk]/) print int(n)
+          else if (u ~ /[Mm]/) print int(n * 1024)
+          else if (u ~ /[Gg]/) print int(n * 1024 * 1024)
+          else if (u ~ /[Tt]/) print int(n * 1024 * 1024 * 1024)
+          else print int(n)
+          exit
+        }
+      }
+    '
+  }
+
+  _kb=""
+  for _target in /opt /opt/ /; do
+    [ -e "$_target" ] || continue
+    _kb=$(df -Pk "$_target" 2>/dev/null | _df_to_kb)
+    [ -n "$_kb" ] && break
+    _kb=$(df -k "$_target" 2>/dev/null | _df_to_kb)
+    [ -n "$_kb" ] && break
+  done
   if [ -z "$_kb" ]; then
-    _kb=$(df -k / 2>/dev/null | awk 'NR==2 && $4 ~ /^[0-9]+$/ {print $4; exit}')
+    _kb=$(df -k 2>/dev/null | awk '
+      BEGIN { avail_col = 0 }
+      NR == 1 {
+        for (i = 1; i <= NF; i++)
+          if ($i == "Available" || $i == "Avail") avail_col = i
+        next
+      }
+      $NF == "/opt" || $NF ~ /^\/opt\// {
+        col = (avail_col ? avail_col : 5)
+        v = $col
+        if (v ~ /^[0-9]+$/) { print v; exit }
+        if (match(v, /^[0-9]+(\.[0-9]+)?[Mm]/)) { print int((v+0)*1024); exit }
+        if (match(v, /^[0-9]+(\.[0-9]+)?[Gg]/)) { print int((v+0)*1024*1024); exit }
+      }
+    ')
   fi
-  echo "${_kb:-0}"
+
+  if [ -n "$DEBUG_DF" ]; then
+    echo "DEBUG_DF: parsed_kb=${_kb:-empty}" >&2
+    echo "DEBUG_DF: df -k /opt:" >&2
+    df -k /opt 2>&1 >&2 || true
+  fi
+  # пустая строка = неизвестно; "0" = реально ноль
+  echo "${_kb}"
 }
 
 # Байты → короткая метка ~12M
@@ -770,10 +836,17 @@ run_menu() {
     fi
     show_available
 
-    # Свободное место (обновить на каждый redraw)
+    # Свободное место (обновить на каждый redraw); 0 — тоже показываем
     FREE_KB=$(get_free_kb)
-    if [ "${FREE_KB:-0}" -gt 0 ] 2>/dev/null; then
-      printf 'Свободно на /opt: %s\n' "$(kb_to_label "$FREE_KB")"
+    if [ -n "$FREE_KB" ] && [ "$FREE_KB" -ge 0 ] 2>/dev/null; then
+      _fl=$(kb_to_label "$FREE_KB")
+      if [ "$FREE_KB" -eq 0 ] 2>/dev/null; then
+        printf '%b\n' "${red}Свободно на /opt: ${_fl}  (нет места!)${reset}"
+      elif [ "$FREE_KB" -lt 10240 ] 2>/dev/null; then
+        printf '%b\n' "${yellow}Свободно на /opt: ${_fl}${reset}"
+      else
+        printf 'Свободно на /opt: %s\n' "$_fl"
+      fi
       echo ""
     fi
 
@@ -782,10 +855,12 @@ run_menu() {
     menu_item() {
       _n="$1"; _lab="$2"; _need="$3"
       _need_l=$(kb_to_label "$_need")
-      if [ "${FREE_KB:-0}" -gt 0 ] 2>/dev/null && [ "$FREE_KB" -ge "$_need" ] 2>/dev/null; then
-        printf '%b\n' "    ${green}[${_n}]  ${_lab}  ~${_need_l}${reset}"
-      elif [ "${FREE_KB:-0}" -gt 0 ] 2>/dev/null; then
-        printf '%b\n' "    ${red}[${_n}]  ${_lab}  ~${_need_l}${reset}"
+      if [ -n "$FREE_KB" ] && [ "$FREE_KB" -ge 0 ] 2>/dev/null; then
+        if [ "$FREE_KB" -ge "$_need" ] 2>/dev/null; then
+          printf '%b\n' "    ${green}[${_n}]  ${_lab}  ~${_need_l}${reset}"
+        else
+          printf '%b\n' "    ${red}[${_n}]  ${_lab}  ~${_need_l}${reset}"
+        fi
       else
         echo "    [${_n}]  ${_lab}  ~${_need_l}"
       fi
@@ -808,7 +883,6 @@ run_menu() {
     choice=$(ask "Выбор [0-5], Enter = выход: " "0")
     case "$choice" in
       1)
-        # set -e: вызов в if, иначе return 2 (в меню) роняет скрипт
         if install_awg_version_select; then
           exit 0
         fi
