@@ -252,42 +252,45 @@ download_file() {
   return 1
 }
 
-# Быстрый GitHub API — как awgm-installer: голый curl без run_timeout/speed-limit
-# Порядок: direct → gh-proxy → ghfast → (тихо) fetch_text с интерфейсами
+# GitHub API для списков/меню: короткие таймауты, 2 зеркала по очереди, без туннелей
+# GH_API_CONNECT / GH_API_MAX — можно переопределить
 fetch_github_api() {
   url="$1"
   _out=""
+  _ct="${GH_API_CONNECT:-3}"
+  _mt="${GH_API_MAX:-6}"
+  _px_fast=$(echo "$GH_PROXIES" | awk '{print $1, $2}')
 
   if command -v curl >/dev/null 2>&1; then
-    _out=$(curl -s --connect-timeout 5 --max-time 12 "$url" 2>/dev/null) || true
+    _out=$(curl -s --connect-timeout "$_ct" --max-time "$_mt" "$url" 2>/dev/null) || true
     if [ -n "$_out" ]; then
       printf '%s\n' "$_out"
       return 0
     fi
-    for px in $GH_PROXIES; do
-      _out=$(curl -s --connect-timeout 5 --max-time 12 "${px}${url}" 2>/dev/null) || true
+    for px in $_px_fast; do
+      [ -n "$px" ] || continue
+      _out=$(curl -s --connect-timeout "$_ct" --max-time "$_mt" "${px}${url}" 2>/dev/null) || true
       if [ -n "$_out" ]; then
         printf '%s\n' "$_out"
         return 0
       fi
     done
   elif command -v wget >/dev/null 2>&1; then
-    _out=$(wget -q -T 8 -O - "$url" 2>/dev/null) || true
+    _out=$(wget -q -T "$_mt" -O - "$url" 2>/dev/null) || true
     if [ -n "$_out" ]; then
       printf '%s\n' "$_out"
       return 0
     fi
-    for px in $GH_PROXIES; do
-      _out=$(wget -q -T 8 -O - "${px}${url}" 2>/dev/null) || true
+    for px in $_px_fast; do
+      [ -n "$px" ] || continue
+      _out=$(wget -q -T "$_mt" -O - "${px}${url}" 2>/dev/null) || true
       if [ -n "$_out" ]; then
         printf '%s\n' "$_out"
         return 0
       fi
     done
   fi
-
-  # Медленный fallback (туннели) — без лишнего вывода
-  fetch_text "$url"
+  return 1
 }
 
 # fetch текста (HTML/прочее): default → proxy → интерфейсы
@@ -452,19 +455,72 @@ detect_arch() {
   echo "✅ Архитектура: $A → $ARCH"
 }
 
+# Размер файла в человекочитаемом виде (напр. 3.2M)
+file_hsize() {
+  [ -f "$1" ] || { echo "?"; return; }
+  if du -h "$1" >/dev/null 2>&1; then
+    du -h "$1" 2>/dev/null | awk '{print $1}'
+  else
+    wc -c < "$1" 2>/dev/null | awk '{
+      if ($1>=1048576) printf "%.1fM\n", $1/1048576
+      else if ($1>=1024) printf "%.0fK\n", $1/1024
+      else print $1
+    }'
+  fi
+}
+
+# Размер файла в байтах (0 если нет)
+file_bytes() {
+  [ -f "$1" ] || { echo 0; return; }
+  wc -c < "$1" 2>/dev/null | tr -d ' \n' || echo 0
+}
+
+# UPX только по размеру (без чтения содержимого):
+#   awg-manager UPX ≪ 10M,  обычная ~26M
+#   sing-box    UPX ≪ 20M,  обычная ~55M
+# $1=bin $2=порог_байт (ниже = UPX)
+build_kind_label() {
+  _bin="$1"
+  _thr="${2:-10485760}"
+  if [ ! -f "$_bin" ]; then
+    echo ""
+    return
+  fi
+  _b=$(file_bytes "$_bin")
+  _sz=$(file_hsize "$_bin")
+  if [ "${_b:-0}" -gt 0 ] 2>/dev/null && [ "$_b" -lt "$_thr" ] 2>/dev/null; then
+    echo "UPX (${_sz})"
+  else
+    echo "${_sz}"
+  fi
+}
+
 detect_installed() {
   CUR_AWG=$(opkg list-installed 2>/dev/null | awk '/^awg-manager /{print $3; exit}')
   [ -z "$CUR_AWG" ] && CUR_AWG=""
 
+  # бинарник: сначала известные пути (без медленного opkg files)
+  CUR_AWG_BIN=""
+  CUR_AWG_KIND=""
+  if [ -n "$CUR_AWG" ]; then
+    for _p in /opt/sbin/awg-manager /opt/bin/awg-manager; do
+      if [ -x "$_p" ]; then CUR_AWG_BIN="$_p"; break; fi
+    done
+    [ -z "$CUR_AWG_BIN" ] && CUR_AWG_BIN=$(command -v awg-manager 2>/dev/null || true)
+    # порог 10M
+    [ -n "$CUR_AWG_BIN" ] && CUR_AWG_KIND=$(build_kind_label "$CUR_AWG_BIN" 10485760)
+  fi
+
   CUR_SB_RAW=""
   CUR_SB_VER=""
-  # Быстрый путь: meta.json (не запускаем бинарник)
+  CUR_SB_KIND=""
+  # meta.json — без запуска бинарника
   _meta="$SINGBOX_DIR/sing-box.meta.json"
   if [ -f "$_meta" ]; then
     CUR_SB_VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_meta" | head -1)
     [ -n "$CUR_SB_VER" ] && CUR_SB_RAW="$CUR_SB_VER"
   fi
-  # Fallback: запуск sing-box version
+  # Fallback: version только если meta нет (медленнее)
   if [ -z "$CUR_SB_VER" ]; then
     if [ -x "$SINGBOX_DIR/sing-box" ]; then
       CUR_SB_RAW=$("$SINGBOX_DIR/sing-box" version 2>/dev/null | head -1 || true)
@@ -475,46 +531,107 @@ detect_installed() {
       CUR_SB_VER=$(echo "$CUR_SB_RAW" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^[:space:]]*' | head -1 || true)
     fi
   fi
+  # порог 20M для sing-box
+  if [ -x "$SINGBOX_DIR/sing-box" ]; then
+    CUR_SB_KIND=$(build_kind_label "$SINGBOX_DIR/sing-box" 20971520)
+  fi
 }
 
 show_installed() {
   echo "Сейчас на роутере:"
   if [ -n "$CUR_AWG" ]; then
-    echo "   awg-manager : $CUR_AWG"
+    if [ -n "$CUR_AWG_KIND" ]; then
+      echo "   awg-manager : $CUR_AWG  · $CUR_AWG_KIND"
+    else
+      echo "   awg-manager : $CUR_AWG"
+    fi
   else
     echo "   awg-manager : не установлен"
   fi
   if [ -n "$CUR_SB_VER" ]; then
-    echo "   sing-box    : $CUR_SB_VER"
+    if [ -n "$CUR_SB_KIND" ]; then
+      echo "   sing-box    : $CUR_SB_VER  · $CUR_SB_KIND"
+    else
+      echo "   sing-box    : $CUR_SB_VER"
+    fi
   elif [ -n "$CUR_SB_RAW" ]; then
     _sb=$(echo "$CUR_SB_RAW" | sed -n 's/.*[Vv]ersion[[:space:]]*//p' | awk '{print $1}')
     [ -z "$_sb" ] && _sb="$CUR_SB_RAW"
-    echo "   sing-box    : $_sb"
+    if [ -n "$CUR_SB_KIND" ]; then
+      echo "   sing-box    : $_sb  · $CUR_SB_KIND"
+    else
+      echo "   sing-box    : $_sb"
+    fi
   else
     echo "   sing-box    : не найден"
   fi
   echo ""
 }
 
-# Записать версию в meta.json (для быстрого чтения в меню)
+# Записать версию (+ kind) в meta.json (для быстрого чтения в меню)
+# $1=version $2=kind (upx|official, необязательно)
 write_sb_meta() {
   _ver="$1"
+  _kind="${2:-}"
   [ -n "$_ver" ] || return 0
   mkdir -p "$SINGBOX_DIR" 2>/dev/null || true
-  printf '{"version":"%s"}\n' "$_ver" > "$SINGBOX_DIR/sing-box.meta.json" 2>/dev/null || true
+  if [ -n "$_kind" ]; then
+    printf '{"version":"%s","kind":"%s"}\n' "$_ver" "$_kind" > "$SINGBOX_DIR/sing-box.meta.json" 2>/dev/null || true
+  else
+    printf '{"version":"%s"}\n' "$_ver" > "$SINGBOX_DIR/sing-box.meta.json" 2>/dev/null || true
+  fi
 }
 
 # ---------------------------------------------------------------------------
 # Релиз compressed
 # ---------------------------------------------------------------------------
+# Свободное место на /opt (КБ); 0 если неизвестно
+get_free_kb() {
+  _kb=$(df -k /opt 2>/dev/null | awk 'NR==2 && $4 ~ /^[0-9]+$/ {print $4; exit}')
+  if [ -z "$_kb" ]; then
+    _kb=$(df -k / 2>/dev/null | awk 'NR==2 && $4 ~ /^[0-9]+$/ {print $4; exit}')
+  fi
+  echo "${_kb:-0}"
+}
+
+# Байты → короткая метка ~12M
+bytes_to_label() {
+  _b="${1:-0}"
+  if [ "$_b" -ge 1048576 ] 2>/dev/null; then
+    echo "$(( (_b + 524288) / 1048576 ))M"
+  elif [ "$_b" -ge 1024 ] 2>/dev/null; then
+    echo "$(( (_b + 512) / 1024 ))K"
+  else
+    echo "${_b}B"
+  fi
+}
+
+# КБ → метка
+kb_to_label() {
+  bytes_to_label $(( ${1:-0} * 1024 ))
+}
+
+# Размер ассета (байт) из JSON релиза по имени файла
+asset_size_bytes() {
+  _name="$1"
+  _json="$2"
+  [ -n "$_name" ] && [ -n "$_json" ] || { echo 0; return; }
+  # объект ассета: "name":"...","size":N  или size раньше name
+  echo "$_json" | tr '{' '\n' | grep -F "\"$_name\"" | head -1 | \
+    grep -oE '"size"[[:space:]]*:[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+' || echo 0
+}
+
 fetch_release_assets() {
-  echo "→ Получаем список файлов из релиза..."
   API_JSON=$(fetch_github_api "https://api.github.com/repos/${REPO}/releases/tags/${TAG}" || true)
   ASSETS=$(echo "$API_JSON" | grep -oE '"browser_download_url":[[:space:]]*"[^"]+"' | sed 's/.*"\([^"]*\)"/\1/' || true)
 
-  if [ -z "$ASSETS" ]; then
-    echo "   API недоступен, пробуем HTML..."
-    HTML=$(fetch_text "https://github.com/${REPO}/releases/expanded_assets/${TAG}" || true)
+  # HTML fallback — только быстрый curl (без туннелей, чтобы не ждать минутами)
+  if [ -z "$ASSETS" ] && command -v curl >/dev/null 2>&1; then
+    _html_url="https://github.com/${REPO}/releases/expanded_assets/${TAG}"
+    HTML=$(curl -sL --connect-timeout 3 --max-time 6 "$_html_url" 2>/dev/null || true)
+    if [ -z "$HTML" ]; then
+      HTML=$(curl -sL --connect-timeout 3 --max-time 6 "https://gh-proxy.com/$_html_url" 2>/dev/null || true)
+    fi
     ASSETS=$(echo "$HTML" | grep -oE 'href="[^"]*releases/download/[^"]+"' | sed 's/href="//;s/"$//' | while read -r p; do
       case "$p" in
         http*) echo "$p" ;;
@@ -524,8 +641,12 @@ fetch_release_assets() {
   fi
 
   if [ -z "$ASSETS" ]; then
-    echo "❌ Не удалось получить список файлов из $REPO ($TAG)"
-    exit 1
+    echo "⚠ Список файлов релиза недоступен (сеть). Меню без «Доступно в релизе»."
+    NEW_AWG=""; NEW_SB=""; IPK_URL=""; SB_URL=""; IPK_NAME=""; SB_NAME=""
+    SIZE_AWG_OFF_KB=28672; SIZE_SB_OFF_KB=59392
+    SIZE_AWG_UPX_KB=5120; SIZE_SB_UPX_KB=10240
+    FREE_KB=$(get_free_kb)
+    return 0
   fi
 
   IPK_URL=$(echo "$ASSETS" | grep -E "$IPK_PAT" | sort -V | tail -1)
@@ -544,6 +665,39 @@ fetch_release_assets() {
   if [ -n "$SB_NAME" ]; then
     NEW_SB=$(echo "$SB_NAME" | sed -n 's/^singbox-\(.*\)-\(aarch64\|mipsel\|mips\)-.*/\1/p')
   fi
+
+  # Оценки места (КБ): нужно свободно ≈ размер пакета + запас на скачивание
+  # Официальные (по факту на роутере): awg ~26M, sing-box ~55M
+  SIZE_AWG_OFF_KB=28672    # ~28M
+  SIZE_SB_OFF_KB=59392     # ~58M
+  SIZE_AWG_UPX_KB=5120     # ~5M запас
+  SIZE_SB_UPX_KB=10240     # ~10M запас
+
+  _awg_b=$(asset_size_bytes "$IPK_NAME" "$API_JSON")
+  _sb_b=$(asset_size_bytes "$SB_NAME" "$API_JSON")
+  if [ "${_awg_b:-0}" -gt 1000 ] 2>/dev/null; then
+    # download + установка + 1M
+    SIZE_AWG_UPX_KB=$(( (_awg_b * 2 / 1024) + 1024 ))
+  fi
+  if [ "${_sb_b:-0}" -gt 1000 ] 2>/dev/null; then
+    SIZE_SB_UPX_KB=$(( (_sb_b * 2 / 1024) + 1024 ))
+  fi
+
+  # Если на роутере уже стоит «толстая» (не UPX) — уточнить оценку
+  if [ -n "$CUR_AWG_BIN" ] && [ -f "$CUR_AWG_BIN" ]; then
+    _sz=$(file_bytes "$CUR_AWG_BIN")
+    if [ "${_sz:-0}" -ge 10485760 ] 2>/dev/null; then
+      SIZE_AWG_OFF_KB=$(( _sz / 1024 + 2048 ))
+    fi
+  fi
+  if [ -x "$SINGBOX_DIR/sing-box" ]; then
+    _sz=$(file_bytes "$SINGBOX_DIR/sing-box")
+    if [ "${_sz:-0}" -ge 20971520 ] 2>/dev/null; then
+      SIZE_SB_OFF_KB=$(( _sz / 1024 + 4096 ))
+    fi
+  fi
+
+  FREE_KB=$(get_free_kb)
 }
 
 show_available() {
@@ -597,25 +751,54 @@ run_menu() {
   fi
 
   # Цикл главного меню: 0 — полный выход; в подменю 0 — возврат сюда
+  # Первый заход: баннер уже на экране (main), без повторного clear
+  _menu_first=1
   while true; do
-    clear 2>/dev/null || true
-    printf '%b\n' "${light_blue}================================================${reset}"
-    printf '%b\n' "${light_blue}  Интерактивный установщик AWG-Manager (Sing-Box)${reset}"
-    printf '%b\n' "${light_blue}================================================${reset}"
-    echo ""
-    echo "✅ Архитектура: $A → $ARCH"
-    echo ""
-    show_installed
+    if [ "$_menu_first" = "1" ]; then
+      # Уже показано в main: баннер, arch, «Сейчас на роутере»
+      _menu_first=0
+    else
+      clear 2>/dev/null || true
+      printf '%b\n' "${light_blue}================================================${reset}"
+      printf '%b\n' "${light_blue}  Интерактивный установщик AWG-Manager (Sing-Box)${reset}"
+      printf '%b\n' "${light_blue}================================================${reset}"
+      echo ""
+      echo "✅ Архитектура: $A → $ARCH"
+      echo ""
+      show_installed
+    fi
     show_available
+
+    # Свободное место (обновить на каждый redraw)
+    FREE_KB=$(get_free_kb)
+    if [ "${FREE_KB:-0}" -gt 0 ] 2>/dev/null; then
+      printf 'Свободно на /opt: %s\n' "$(kb_to_label "$FREE_KB")"
+      echo ""
+    fi
+
+    # Пункт меню: цвет по месту (зелёный = хватает, красный = мало)
+    # $1=номер $2=подпись $3=нужно_КБ
+    menu_item() {
+      _n="$1"; _lab="$2"; _need="$3"
+      _need_l=$(kb_to_label "$_need")
+      if [ "${FREE_KB:-0}" -gt 0 ] 2>/dev/null && [ "$FREE_KB" -ge "$_need" ] 2>/dev/null; then
+        printf '%b\n' "    ${green}[${_n}]  ${_lab}  ~${_need_l}${reset}"
+      elif [ "${FREE_KB:-0}" -gt 0 ] 2>/dev/null; then
+        printf '%b\n' "    ${red}[${_n}]  ${_lab}  ~${_need_l}${reset}"
+      else
+        echo "    [${_n}]  ${_lab}  ~${_need_l}"
+      fi
+    }
+
     printf '%b\n' "${yellow}Выбрать пакет для установки:${reset}"
     echo ""
     echo "  AWG-Manager"
-    echo "    [1]  официальная версия"
-    echo "    [2]  UPX версия (сжатая)"
+    menu_item 1 "официальная версия" "${SIZE_AWG_OFF_KB:-28672}"
+    menu_item 2 "UPX версия (сжатая)" "${SIZE_AWG_UPX_KB:-5120}"
     echo ""
     echo "  Sing-Box"
-    echo "    [3]  официальная версия"
-    echo "    [4]  UPX версия (сжатая)"
+    menu_item 3 "официальная версия" "${SIZE_SB_OFF_KB:-59392}"
+    menu_item 4 "UPX версия (сжатая)" "${SIZE_SB_UPX_KB:-10240}"
     echo ""
     echo "  прочее"
     echo "    [5]  Настроить доступ через туннель"
@@ -806,7 +989,7 @@ install_sb_upx() {
 
   cp "$SB_NAME" "$SINGBOX_DIR/sing-box"
   chmod +x "$SINGBOX_DIR/sing-box"
-  [ -n "$NEW_SB" ] && write_sb_meta "$NEW_SB"
+  [ -n "$NEW_SB" ] && write_sb_meta "$NEW_SB" "upx"
   echo "✅ sing-box ($SB_MODE) → $SINGBOX_DIR/sing-box"
   if [ -n "$NEW_SB" ]; then
     echo "   version: $NEW_SB"
@@ -1129,7 +1312,7 @@ install_sb_official_version_select() {
 
   cp "$sb_name" "$SINGBOX_DIR/sing-box"
   chmod +x "$SINGBOX_DIR/sing-box"
-  write_sb_meta "$ver_disp"
+  write_sb_meta "$ver_disp" "official"
   echo "✅ sing-box $ver_disp → $SINGBOX_DIR/sing-box"
   echo "   version: $ver_disp"
 
@@ -1252,7 +1435,7 @@ install_sb_version_select() {
 
   cp "$sb_name" "$SINGBOX_DIR/sing-box"
   chmod +x "$SINGBOX_DIR/sing-box"
-  write_sb_meta "$ver_disp"
+  write_sb_meta "$ver_disp" "upx"
   echo "✅ sing-box $ver_disp → $SINGBOX_DIR/sing-box"
   echo "   version: $ver_disp"
 
@@ -2354,8 +2537,9 @@ main() {
   detect_arch
   echo ""
   detect_installed
+  show_installed
+  echo "→ Проверяем доступные версии в релизе..."
   fetch_release_assets
-  # show_installed / show_available — внутри run_menu (после clear)
   run_menu
 
   if [ "$DO_AWG" != "1" ] && [ "$DO_SB" != "1" ]; then
