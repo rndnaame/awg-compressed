@@ -703,29 +703,30 @@ fetch_release_assets() {
 show_available() {
   echo "Доступно в релизе:"
 
+  # Жёлтый/⚡ только если пакет уже стоит и в релизе есть новее
   AWG_HL=0
-  if [ -n "$NEW_AWG" ]; then
-    if [ -z "$CUR_AWG" ]; then
-      AWG_HL=1
-    else
-      _c=$(ver_cmp "$NEW_AWG" "$CUR_AWG")
-      [ "$_c" = "1" ] && AWG_HL=1
-    fi
+  if [ -n "$NEW_AWG" ] && [ -n "$CUR_AWG" ]; then
+    _c=$(ver_cmp "$NEW_AWG" "$CUR_AWG")
+    [ "$_c" = "1" ] && AWG_HL=1
   fi
   AWG_LINE="   awg-manager : ${NEW_AWG:-—}"
   [ "$AWG_HL" = "1" ] && AWG_LINE="${AWG_LINE}  ⚡"
   hl_line "$AWG_HL" "$AWG_LINE"
 
   SB_HL=0
-  if [ -n "$NEW_SB" ]; then
-    if [ -z "$CUR_SB_RAW" ]; then
-      SB_HL=1
-    else
-      case "$CUR_SB_RAW" in
-        *"$NEW_SB"*) SB_HL=0 ;;
-        *) SB_HL=1 ;;
-      esac
-    fi
+  if [ -n "$NEW_SB" ] && [ -n "$CUR_SB_VER$CUR_SB_RAW" ]; then
+    case "$CUR_SB_RAW$CUR_SB_VER" in
+      *"$NEW_SB"*) SB_HL=0 ;;
+      *)
+        # сравнить версии, если обе похожи на semver-подобные
+        if [ -n "$CUR_SB_VER" ]; then
+          _c=$(ver_cmp "$NEW_SB" "$CUR_SB_VER")
+          [ "$_c" = "1" ] && SB_HL=1
+        else
+          SB_HL=1
+        fi
+        ;;
+    esac
   fi
   SB_LINE="   sing-box    : ${NEW_SB:-—}"
   [ "$SB_HL" = "1" ] && SB_LINE="${SB_LINE}  ⚡"
