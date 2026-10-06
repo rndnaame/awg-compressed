@@ -644,7 +644,7 @@ fetch_release_assets() {
     echo "⚠ Список файлов релиза недоступен (сеть). Меню без «Доступно в релизе»."
     NEW_AWG=""; NEW_SB=""; IPK_URL=""; SB_URL=""; IPK_NAME=""; SB_NAME=""
     SIZE_AWG_OFF_KB=28672; SIZE_SB_OFF_KB=59392
-    SIZE_AWG_UPX_KB=5120; SIZE_SB_UPX_KB=10240
+    SIZE_AWG_UPX_KB=8192; SIZE_SB_UPX_KB=13312
     FREE_KB=$(get_free_kb)
     return 0
   fi
@@ -670,8 +670,8 @@ fetch_release_assets() {
   # Официальные (по факту на роутере): awg ~26M, sing-box ~55M
   SIZE_AWG_OFF_KB=28672    # ~28M
   SIZE_SB_OFF_KB=59392     # ~58M
-  SIZE_AWG_UPX_KB=5120     # ~5M запас
-  SIZE_SB_UPX_KB=10240     # ~10M запас
+  SIZE_AWG_UPX_KB=8192     # ~8M
+  SIZE_SB_UPX_KB=13312    # ~13M
 
   _awg_b=$(asset_size_bytes "$IPK_NAME" "$API_JSON")
   _sb_b=$(asset_size_bytes "$SB_NAME" "$API_JSON")
@@ -795,11 +795,11 @@ run_menu() {
     echo ""
     echo "  AWG-Manager"
     menu_item 1 "официальная версия" "${SIZE_AWG_OFF_KB:-28672}"
-    menu_item 2 "UPX версия (сжатая)" "${SIZE_AWG_UPX_KB:-5120}"
+    menu_item 2 "UPX версия (сжатая)" "${SIZE_AWG_UPX_KB:-8192}"
     echo ""
     echo "  Sing-Box"
     menu_item 3 "официальная версия" "${SIZE_SB_OFF_KB:-59392}"
-    menu_item 4 "UPX версия (сжатая)" "${SIZE_SB_UPX_KB:-10240}"
+    menu_item 4 "UPX версия (сжатая)" "${SIZE_SB_UPX_KB:-13312}"
     echo ""
     echo "  прочее"
     echo "    [5]  Настроить доступ через туннель"
