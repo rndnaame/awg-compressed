@@ -175,6 +175,28 @@ jobs:
             fi
           done < /tmp/wanted.txt
 
+          # Если в rolling-релизе нет ни одного sing-box, а на зеркале есть —
+          # принудительно собрать (после сбоя не зацикливаться на refresh-only)
+          if ! grep -q '^singbox-' /tmp/existing.txt 2>/dev/null; then
+            if grep -q '^singbox-' /tmp/wanted.txt 2>/dev/null; then
+              echo ">>> В ${ROLLING_TAG} нет sing-box — принудительная сборка"
+              while read -r want; do
+                case "$want" in
+                  singbox-*)
+                    if ! grep -qxF "$want" /tmp/todo.txt 2>/dev/null; then
+                      echo "  BUILD(force): $want"
+                      echo "$want" >> /tmp/todo.txt
+                    fi
+                    NEED=1
+                    NEED_SB=1
+                    ;;
+                esac
+              done < /tmp/wanted.txt
+            else
+              echo ">>> В ${ROLLING_TAG} нет sing-box, и зеркало не отдало список — проверьте MIRROR/singbox/"
+            fi
+          fi
+
           # Официальный changelog: только body upstream (без лишнего текста)
           fetch_official_cl() {
             _repo="$1"
@@ -455,7 +477,8 @@ jobs:
             exit 1
           fi
 
-      # Удаляем старый compressed и создаём заново → всегда сверху в списке релизов
+      # Удаляем release + git-тег compressed.
+      # Список релизов GitHub сортирует по created_at; старый тег (авг) → Latest в конце.
       - name: Recreate compressed (Latest, always on top)
         if: steps.build.outputs.skip != 'true'
         env:
@@ -464,20 +487,18 @@ jobs:
           set -e
           OUR_REPO="${{ github.repository }}"
           TAG="compressed"
-          JSON=$(curl -sL \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${OUR_REPO}/releases/tags/${TAG}" || true)
+          API="https://api.github.com/repos/${OUR_REPO}"
+          auth=(-H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json")
+
+          JSON=$(curl -sL "${auth[@]}" "$API/releases/tags/${TAG}" || true)
           RID=$(echo "$JSON" | jq -r '.id // empty')
           if [ -n "$RID" ]; then
-            echo "Удаляем старый release $TAG (id=$RID)..."
-            curl -sL -X DELETE \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${OUR_REPO}/releases/${RID}"
-            # тег может остаться — softprops/gh пересоздаст release на том же теге
-            sleep 2
+            echo "Удаляем release $TAG (id=$RID)..."
+            curl -sL -X DELETE "${auth[@]}" "$API/releases/${RID}"
           fi
+          echo "Удаляем git-тег refs/tags/${TAG}..."
+          curl -sL -X DELETE "${auth[@]}" "$API/git/refs/tags/${TAG}" || true
+          sleep 3
 
       - name: Publish compressed (Latest)
         if: steps.build.outputs.skip != 'true'
@@ -526,12 +547,17 @@ jobs:
               "$url" || true
           done
 
-          echo "Удаляем $TAG (id=$RID)..."
+          echo "Удаляем release $TAG (id=$RID)..."
           curl -sL -X DELETE \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${OUR_REPO}/releases/${RID}"
-          sleep 2
+          echo "Удаляем git-тег refs/tags/${TAG}..."
+          curl -sL -X DELETE \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OUR_REPO}/git/refs/tags/${TAG}" || true
+          sleep 3
 
       - name: Re-publish compressed after refresh
         if: steps.build.outputs.refresh_latest == 'true'
