@@ -17,7 +17,7 @@ set -e
 # Константы
 # ---------------------------------------------------------------------------
 REPO="rndnaame/awg-compressed"
-TAG="compressed"
+TAG="upx"
 TMP="/tmp/awg-compressed-install"
 SINGBOX_DIR="/opt/etc/awg-manager/singbox"
 DEFAULT_IFACES="nwg0 nwg1 t2s0 t2s1 opkgtun10 awgm0 __default__"
