@@ -100,12 +100,13 @@ jobs:
           echo "  sing-box: ${SB_VER:-none}"
           if [ -n "$SB_VER" ]; then
             # Только href="…", не видимый текст (nginx обрезает имя до …sh..>)
+            # Pattern с ведущим "-" — только после "--", иначе grep: invalid option -- '('
             for f in $(
               curl -sL "$MIRROR/singbox/$SB_VER/" \
                 | grep -oE 'href="singbox-[^"]+"' \
                 | sed 's/^href="//;s/"$//' \
-                | grep -vE '\.(sha256|sig|asc)$' \
-                | grep -E '-(aarch64-3\.10|mipsel-3\.4|mips-3\.4)$' \
+                | grep -vE -- '\.(sha256|sig|asc)$' \
+                | grep -E -- '-(aarch64-3\.10|mipsel-3\.4|mips-3\.4)$' \
                 | sort -u
             ); do
               want="${f}_compressed"
@@ -113,7 +114,11 @@ jobs:
               echo "$want" >> /tmp/wanted.txt
               echo "sb|$SB_VER|$f|$want" >> /tmp/wanted_src.txt
             done
+            if ! grep -q '^singbox-' /tmp/wanted.txt 2>/dev/null; then
+              echo "  ⚠ список SB с зеркала пуст — проверьте $MIRROR/singbox/$SB_VER/"
+            fi
           fi
+
           sort -u /tmp/wanted.txt -o /tmp/wanted.txt
           cp /tmp/wanted.txt wanted.txt
 
