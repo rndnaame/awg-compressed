@@ -4,7 +4,7 @@ UPX-сжатые сборки **awg-manager** и **sing-box** для Keenetic + 
 
 | | |
 |---|---|
-| Релиз с файлами | [Releases → `compressed`](https://github.com/rndnaame/awg-compressed/releases/tag/compressed) |
+| Релиз с файлами | [Releases → `compressed`](https://github.com/rndnaame/awg-compressed/releases/tag/upx) |
 | Установщик | [`install-compressed.sh`](https://github.com/rndnaame/awg-compressed/blob/main/install-compressed.sh) |
 | Исходники пакетов | [hoaxisr/awg-manager](https://github.com/hoaxisr/awg-manager), [hoaxisr/amnezia-box](https://github.com/hoaxisr/amnezia-box), зеркало [repo.hoaxisr.ru](http://repo.hoaxisr.ru) |
 
