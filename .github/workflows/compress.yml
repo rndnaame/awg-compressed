@@ -13,10 +13,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - name: Install tools
+      # UPX с GitHub — быстрее и стабильнее apt (нет apt-get update, версия зафиксирована).
+      # curl/wget/jq на ubuntu-24.04 уже есть в образе runner.
+      - name: Install UPX
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y upx-ucl curl wget jq
+          set -e
+          UPX_VER=4.2.2
+          curl -fsSL "https://github.com/upx/upx/releases/download/v${UPX_VER}/upx-${UPX_VER}-amd64_linux.tar.xz" \
+            | sudo tar -xJ --strip-components=1 -C /usr/local/bin "upx-${UPX_VER}-amd64_linux/upx"
+          sudo chmod +x /usr/local/bin/upx
+          upx --version
+          command -v curl wget jq >/dev/null
 
       - name: Check versions and compress if needed
         id: build
