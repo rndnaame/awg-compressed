@@ -376,7 +376,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Полный набор ассетов для Latest: новые из out/ + недостающие с текущего compressed
+      # Полный набор для Latest:
+      # 1) ВСЕ текущие ассеты compressed (чтобы не потерять sing-box, если AWG собрался один)
+      # 2) поверх — свежая сборка (cp -f)
       - name: Prepare full Latest asset set
         if: steps.build.outputs.skip != 'true'
         env:
@@ -385,35 +387,73 @@ jobs:
           set -e
           OUR_REPO="${{ github.repository }}"
           TAG="compressed"
+          rm -rf out/latest
           mkdir -p out/latest
-          # свежесобранное
-          cp -n out/*.ipk out/latest/ 2>/dev/null || true
-          cp -n out/singbox-*_compressed out/latest/ 2>/dev/null || true
-          cp -n out/awg/* out/latest/ 2>/dev/null || true
-          cp -n out/sb/* out/latest/ 2>/dev/null || true
 
           JSON=$(curl -sL \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${OUR_REPO}/releases/tags/${TAG}" || true)
 
-          if [ -f wanted.txt ] && echo "$JSON" | jq -e '.assets' >/dev/null 2>&1; then
+          if echo "$JSON" | jq -e '.assets | length > 0' >/dev/null 2>&1; then
+            echo "== Сохраняем текущие ассеты $TAG =="
+            echo "$JSON" | jq -c '.assets[]' | while read -r row; do
+              name=$(echo "$row" | jq -r '.name')
+              url=$(echo "$row" | jq -r '.browser_download_url')
+              [ -n "$name" ] && [ "$name" != "null" ] || continue
+              echo "  скачиваем $name"
+              curl -sL -o "out/latest/$name" \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Accept: application/octet-stream" \
+                "$url" || echo "  ⚠ не скачался $name"
+            done
+          else
+            echo "  (старого $TAG нет или без ассетов)"
+          fi
+
+          echo "== Накладываем свежую сборку =="
+          cp -f out/*.ipk out/latest/ 2>/dev/null || true
+          cp -f out/singbox-*_compressed out/latest/ 2>/dev/null || true
+          cp -f out/awg/* out/latest/ 2>/dev/null || true
+          cp -f out/sb/* out/latest/ 2>/dev/null || true
+
+          # Убрать устаревшие версии того же слота, если в wanted есть новая
+          # (awg-manager_*_ARCH_*, singbox-*-ARCH_compressed)
+          if [ -f wanted.txt ]; then
             while read -r want; do
               [ -n "$want" ] || continue
-              [ -f "out/latest/$want" ] && continue
-              url=$(echo "$JSON" | jq -r --arg n "$want" '.assets[] | select(.name==$n) | .browser_download_url' | head -1)
-              if [ -n "$url" ] && [ "$url" != "null" ]; then
-                echo "  + из старого $TAG: $want"
-                curl -sL -o "out/latest/$want" \
-                  -H "Authorization: Bearer $GITHUB_TOKEN" \
-                  -H "Accept: application/octet-stream" \
-                  "$url" || true
-              fi
+              [ -f "out/latest/$want" ] || continue
+              case "$want" in
+                awg-manager_*_aarch64-3.10-kn_compressed.ipk)
+                  find out/latest -maxdepth 1 -name 'awg-manager_*_aarch64-3.10-kn_compressed.ipk' ! -name "$want" -delete 2>/dev/null || true
+                  ;;
+                awg-manager_*_mipsel-3.4-kn_compressed.ipk)
+                  find out/latest -maxdepth 1 -name 'awg-manager_*_mipsel-3.4-kn_compressed.ipk' ! -name "$want" -delete 2>/dev/null || true
+                  ;;
+                awg-manager_*_mips-3.4-kn_compressed.ipk)
+                  find out/latest -maxdepth 1 -name 'awg-manager_*_mips-3.4-kn_compressed.ipk' ! -name "$want" -delete 2>/dev/null || true
+                  ;;
+                singbox-*-aarch64-3.10_compressed)
+                  find out/latest -maxdepth 1 -name 'singbox-*-aarch64-3.10_compressed' ! -name "$want" -delete 2>/dev/null || true
+                  ;;
+                singbox-*-mipsel-3.4_compressed)
+                  find out/latest -maxdepth 1 -name 'singbox-*-mipsel-3.4_compressed' ! -name "$want" -delete 2>/dev/null || true
+                  ;;
+                singbox-*-mips-3.4_compressed)
+                  find out/latest -maxdepth 1 -name 'singbox-*-mips-3.4_compressed' ! -name "$want" -delete 2>/dev/null || true
+                  ;;
+              esac
             done < wanted.txt
           fi
 
           echo "Ассеты для Latest:"
           ls -lh out/latest/ || true
+          # не публиковать пустой набор
+          count=$(find out/latest -type f | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "ERROR: out/latest пуст — отмена публикации"
+            exit 1
+          fi
 
       # Удаляем старый compressed и создаём заново → всегда сверху в списке релизов
       - name: Recreate compressed (Latest, always on top)
