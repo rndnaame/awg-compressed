@@ -387,6 +387,7 @@ jobs:
           files: out/awg/*
           fail_on_unmatched_files: false
           make_latest: false
+          prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -400,6 +401,7 @@ jobs:
           files: out/sb/*
           fail_on_unmatched_files: false
           make_latest: false
+          prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -482,8 +484,16 @@ jobs:
             exit 1
           fi
 
+      # Пауза: топик-релизы уже опубликованы; ждём, чтобы created_at у Latest был новее
+      # (при одинаковом created_at GitHub может поставить топик выше Latest).
+      - name: Wait before Latest (ordering)
+        if: steps.build.outputs.skip != 'true'
+        run: |
+          echo "Ждём 20с, чтобы Latest получил более поздний created_at..."
+          sleep 20
+
       # Удаляем release + git-тег compressed.
-      # Список релизов GitHub сортирует по created_at; старый тег (авг) → Latest в конце.
+      # Список релизов GitHub сортирует по created_at; старый тег → Latest в конце.
       - name: Recreate compressed (Latest, always on top)
         if: steps.build.outputs.skip != 'true'
         env:
@@ -552,6 +562,8 @@ jobs:
               "$url" || true
           done
 
+          echo "Ждём 20с перед пересозданием Latest..."
+          sleep 20
           echo "Удаляем release $TAG (id=$RID)..."
           curl -sL -X DELETE \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
