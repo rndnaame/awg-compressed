@@ -92,7 +92,15 @@ jobs:
           )
           echo "  sing-box: ${SB_VER:-none}"
           if [ -n "$SB_VER" ]; then
-            for f in $(curl -sL "$MIRROR/singbox/$SB_VER/" | grep -oE 'singbox-[^"<> ]+' | grep -v sha256 | grep -E 'aarch64|mips' | sort -u); do
+            # Только href="…", не видимый текст (nginx обрезает имя до …sh..>)
+            for f in $(
+              curl -sL "$MIRROR/singbox/$SB_VER/" \
+                | grep -oE 'href="singbox-[^"]+"' \
+                | sed 's/^href="//;s/"$//' \
+                | grep -vE '\.(sha256|sig|asc)$' \
+                | grep -E '-(aarch64-3\.10|mipsel-3\.4|mips-3\.4)$' \
+                | sort -u
+            ); do
               want="${f}_compressed"
               echo "  SB: $f => $want"
               echo "$want" >> /tmp/wanted.txt
@@ -270,8 +278,31 @@ jobs:
             elif [ "$kind" = "sb" ]; then
               sb_ver="$a"
               f="$b"
+              # защита от мусорных имён (обрезанный HTML, .sha256 и т.п.)
+              case "$f" in
+                *sha256*|*'&'*|*'>'*|*'<'*|*'..'*)
+                  echo "SKIP bad SB name: $f"
+                  continue
+                  ;;
+              esac
+              case "$f" in
+                singbox-*-aarch64-3.10|singbox-*-mipsel-3.4|singbox-*-mips-3.4) ;;
+                *)
+                  echo "SKIP unexpected SB name: $f"
+                  continue
+                  ;;
+              esac
               echo "SB: $f"
-              wget -q -O "work/$f" "$MIRROR/singbox/$sb_ver/$f"
+              if ! wget -q -O "work/$f" "$MIRROR/singbox/$sb_ver/$f"; then
+                echo "ERROR: download failed $MIRROR/singbox/$sb_ver/$f"
+                exit 1
+              fi
+              # бинарник должен быть крупным
+              _sz=$(wc -c < "work/$f" | tr -d ' ')
+              if [ "${_sz:-0}" -lt 1000000 ]; then
+                echo "ERROR: $f too small (${_sz} bytes) — не бинарник"
+                exit 1
+              fi
               cp "work/$f" "out/sb/$want"
               chmod +x "out/sb/$want"
               upx_fast "out/sb/$want"
