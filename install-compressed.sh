@@ -1637,8 +1637,35 @@ cleanup() {
 
 [ "$(id -u 2>/dev/null)" = "0" ] || die "скрипт нужно запускать от root"
 command -v opkg >/dev/null 2>&1 || die "не найден opkg (нужен Entware)"
-command -v jq >/dev/null 2>&1 || die "не найден jq (opkg install jq)"
 command -v ndmc >/dev/null 2>&1 || die "не найден ndmc"
+
+# jq обязателен для settings.json — предложить установить
+if ! command -v jq >/dev/null 2>&1; then
+  printf '%b\n' "${red}ОШИБКА: не найден jq${reset}" >&2
+  printf '%b\n' "  jq нужен для чтения/записи settings.json" >&2
+  _ans=""
+  if [ -r /dev/tty ]; then
+    printf '%s' "Установить jq через opkg? [Y/n]: " > /dev/tty
+    IFS= read -r _ans < /dev/tty || _ans=""
+  else
+    printf '%s' "Установить jq через opkg? [Y/n]: "
+    IFS= read -r _ans || _ans=""
+  fi
+  case "${_ans:-Y}" in
+    n|N|no|NO)
+      die "jq не установлен — настройка туннеля невозможна"
+      ;;
+    *)
+      say "→ opkg update && opkg install jq ..."
+      opkg update 2>/dev/null || true
+      if ! opkg install jq; then
+        die "не удалось установить jq (opkg install jq)"
+      fi
+      command -v jq >/dev/null 2>&1 || die "jq установлен, но не найден в PATH"
+      printf '%b\n' "${green}OK: jq установлен${reset}"
+      ;;
+  esac
+fi
 
 # Stale-lock aware locking: store PID, verify liveness on collision.
 # ВАЖНО: trap ставится только ПОСЛЕ захвата lock — иначе выход по
