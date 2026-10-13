@@ -381,6 +381,44 @@ warn_force_backup() {
   return 0
 }
 
+# Зависимости awg-manager (часто не в кэше opkg без update)
+ensure_awg_deps() {
+  echo "→ Проверка зависимостей (ip-full, wireguard-tools, conntrack)..."
+  opkg update 2>/dev/null || true
+  for _dep in ip-full wireguard-tools conntrack; do
+    if opkg list-installed 2>/dev/null | grep -q "^${_dep} "; then
+      echo "   ✓ $_dep уже установлен"
+    else
+      echo "   → установка $_dep ..."
+      if opkg install "$_dep" 2>/dev/null; then
+        echo "   ✓ $_dep"
+      else
+        echo "   ⚠ не удалось установить $_dep (продолжаем)"
+      fi
+    fi
+  done
+}
+
+# opkg install локального IPK; при ошибке архитектуры/depends — повтор с force
+# $1 = флаги (может быть пусто), $2 = путь к .ipk
+opkg_install_ipk() {
+  _flags="$1"
+  _path="$2"
+  # shellcheck disable=SC2086
+  if opkg install $_flags "$_path"; then
+    return 0
+  fi
+  echo "   ⚠ обычная установка не удалась — пробуем --force-depends ..."
+  # shellcheck disable=SC2086
+  if opkg install $_flags --force-depends "$_path"; then
+    return 0
+  fi
+  echo "   ⚠ всё ещё ошибка — пробуем --force-depends --force-overwrite ..."
+  # shellcheck disable=SC2086
+  opkg install $_flags --force-depends --force-overwrite "$_path"
+  return $?
+}
+
 # Установка IPK awg-manager с умным выбором opkg-флагов.
 # $1 = путь к .ipk, $2 = целевая версия (без v)
 # missing / upgrade → opkg install
@@ -391,31 +429,38 @@ install_awg_ipk() {
   _new="$2"
   _cur=$(opkg list-installed 2>/dev/null | awk '/^awg-manager /{print $3; exit}')
 
+  # абсолютный путь — надёжнее для opkg на Entware
+  case "$_ipk" in
+    /*) _ipk_path="$_ipk" ;;
+    *)  _ipk_path="$(pwd)/$_ipk" ;;
+  esac
+  [ -f "$_ipk_path" ] || { echo "❌ нет файла $_ipk_path"; return 1; }
+
+  ensure_awg_deps
+
   if [ -z "$_cur" ]; then
     echo "📦 Установка awg-manager $_new ..."
-    opkg install "./$_ipk"
+    opkg_install_ipk "" "$_ipk_path"
     return $?
   fi
 
   if [ "$_cur" = "$_new" ]; then
     echo "📦 Переустановка той же версии $_new ..."
     warn_force_backup || return 2
-    opkg install --force-reinstall "./$_ipk"
+    opkg_install_ipk "--force-reinstall" "$_ipk_path"
     return $?
   fi
 
   _cmp=$(ver_cmp "$_new" "$_cur")
   if [ "$_cmp" = "1" ]; then
-    # new > cur — обычное обновление, без force
     echo "📦 Обновление awg-manager: $_cur → $_new ..."
-    opkg install "./$_ipk"
+    opkg_install_ipk "" "$_ipk_path"
     return $?
   fi
 
-  # new < cur — откат
   echo "📦 Откат awg-manager: $_cur → $_new ..."
   warn_force_backup || return 2
-  opkg install --force-downgrade "./$_ipk"
+  opkg_install_ipk "--force-downgrade" "$_ipk_path"
   return $?
 }
 
@@ -1017,24 +1062,15 @@ install_awg_upx() {
     exit 1
   fi
 
-  case "$AWG_MODE" in
-    upgrade|install)
-      echo "📦 Обновление/установка awg-manager ($AWG_MODE)..."
-      if opkg install "./$IPK_NAME"; then
-        echo "✅ awg-manager: $CUR_AWG → $NEW_AWG"
-      else
-        echo "⚠️ opkg install не удался"
-        return 1
-      fi
-      ;;
-    reinstall)
-      # только при совпадении версии
-      echo "📦 Переустановка awg-manager (force-reinstall)..."
-      warn_force_backup || return 0
-      opkg install --force-reinstall "./$IPK_NAME"
-      echo "✅ awg-manager переустановлен"
-      ;;
-  esac
+  _ver="${NEW_AWG:-unknown}"
+  if install_awg_ipk "$IPK_NAME" "$_ver"; then
+    echo "✅ awg-manager: ${CUR_AWG:-—} → $_ver"
+  else
+    _rc=$?
+    [ "$_rc" = "2" ] && return 0
+    echo "⚠️ opkg install не удался"
+    return 1
+  fi
 }
 
 install_sb_upx() {
