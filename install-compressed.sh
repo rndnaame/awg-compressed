@@ -13,6 +13,9 @@
 
 set -e
 
+# Entware: opkg и утилиты в /opt — при запуске из чужого меню (NFQWS и т.п.) PATH часто пустой
+export PATH="/opt/bin:/opt/sbin:/bin:/sbin:/usr/bin:/usr/sbin:${PATH:-}"
+
 # ---------------------------------------------------------------------------
 # Константы
 # ---------------------------------------------------------------------------
@@ -468,7 +471,33 @@ install_awg_ipk() {
 # Архитектура и установленные версии
 # ---------------------------------------------------------------------------
 detect_arch() {
-  A=$(opkg print-architecture 2>/dev/null | sort -k3 -nr | awk '$2!="all"{print $2;exit}')
+  # 1) opkg print-architecture (нужен PATH с /opt/bin)
+  A=""
+  for _opkg in opkg /opt/bin/opkg /opt/sbin/opkg; do
+    command -v "$_opkg" >/dev/null 2>&1 || [ -x "$_opkg" ] || continue
+    A=$("$_opkg" print-architecture 2>/dev/null | sort -k3 -nr | awk '$2!="all" && $2!="noarch"{print $2;exit}')
+    [ -n "$A" ] && break
+  done
+  # 2) /opt/etc/opkg.conf — строки "arch NAME PRIORITY"
+  if [ -z "$A" ] && [ -f /opt/etc/opkg.conf ]; then
+    A=$(awk '/^arch / && $2!="all" && $2!="noarch"{print $2; exit}' /opt/etc/opkg.conf)
+  fi
+  # 3) uname / cpuinfo (mipsel vs mips)
+  if [ -z "$A" ]; then
+    _m=$(uname -m 2>/dev/null || true)
+    case "$_m" in
+      aarch64|arm64|armv8*) A="aarch64" ;;
+      arm*)                 A="arm" ;;
+      mips*)
+        if grep -qi 'little endian' /proc/cpuinfo 2>/dev/null; then
+          A="mipsel"
+        else
+          A="mips"
+        fi
+        ;;
+    esac
+  fi
+
   case "$A" in
     aarch64*|arm*)
       ARCH=aarch64
@@ -492,13 +521,20 @@ detect_arch() {
       ARCH_REPO="mips-k3.4"
       ;;
     *)
-      echo "❌ Неизвестная архитектура: ${A:-пусто}"
-      opkg print-architecture 2>/dev/null || true
+      printf '%b\n' "${red}❌ Неизвестная архитектура: ${A:-пусто}${reset}"
+      echo "Диагностика:"
+      echo "  PATH=$PATH"
+      echo "  which opkg: $(command -v opkg 2>/dev/null || echo нет)"
+      echo "  opkg print-architecture:"
+      (opkg print-architecture 2>&1 || /opt/bin/opkg print-architecture 2>&1 || true) | sed 's/^/    /'
+      echo "  uname -m: $(uname -m 2>/dev/null || echo ?)"
+      [ -f /opt/etc/opkg.conf ] && echo "  opkg.conf arch:" && grep -E '^arch ' /opt/etc/opkg.conf 2>/dev/null | sed 's/^/    /'
       exit 1
       ;;
   esac
   echo "✅ Архитектура: $A → $ARCH"
 }
+
 
 # Размер файла в человекочитаемом виде (напр. 3.2M)
 file_hsize() {
