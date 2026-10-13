@@ -383,17 +383,17 @@ warn_force_backup() {
 
 # Зависимости awg-manager (часто не в кэше opkg без update)
 ensure_awg_deps() {
-  echo "→ Проверка зависимостей (ip-full, wireguard-tools, conntrack)..."
+  printf '%b\n' "${green}→ Проверка зависимостей (ip-full, wireguard-tools, conntrack)...${reset}"
   opkg update 2>/dev/null || true
   for _dep in ip-full wireguard-tools conntrack; do
     if opkg list-installed 2>/dev/null | grep -q "^${_dep} "; then
-      echo "   ✓ $_dep уже установлен"
+      printf '%b\n' "   ${green}✓${reset} $_dep уже установлен"
     else
-      echo "   → установка $_dep ..."
+      printf '%b\n' "   ${green}→ установка $_dep ...${reset}"
       if opkg install "$_dep" 2>/dev/null; then
-        echo "   ✓ $_dep"
+        printf '%b\n' "   ${green}✓ $_dep${reset}"
       else
-        echo "   ⚠ не удалось установить $_dep (продолжаем)"
+        printf '%b\n' "   ${yellow}⚠ не удалось установить $_dep (продолжаем)${reset}"
       fi
     fi
   done
@@ -439,13 +439,13 @@ install_awg_ipk() {
   ensure_awg_deps
 
   if [ -z "$_cur" ]; then
-    echo "📦 Установка awg-manager $_new ..."
+    printf '%b\n' "${green}📦 Установка awg-manager $_new ...${reset}"
     opkg_install_ipk "" "$_ipk_path"
     return $?
   fi
 
   if [ "$_cur" = "$_new" ]; then
-    echo "📦 Переустановка той же версии $_new ..."
+    printf '%b\n' "${green}📦 Переустановка той же версии $_new ...${reset}"
     warn_force_backup || return 2
     opkg_install_ipk "--force-reinstall" "$_ipk_path"
     return $?
@@ -453,12 +453,12 @@ install_awg_ipk() {
 
   _cmp=$(ver_cmp "$_new" "$_cur")
   if [ "$_cmp" = "1" ]; then
-    echo "📦 Обновление awg-manager: $_cur → $_new ..."
+    printf '%b\n' "${green}📦 Обновление awg-manager: $_cur → $_new ...${reset}"
     opkg_install_ipk "" "$_ipk_path"
     return $?
   fi
 
-  echo "📦 Откат awg-manager: $_cur → $_new ..."
+  printf '%b\n' "${green}📦 Откат awg-manager: $_cur → $_new ...${reset}"
   warn_force_backup || return 2
   opkg_install_ipk "--force-downgrade" "$_ipk_path"
   return $?
