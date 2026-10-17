@@ -1,26 +1,28 @@
 # awg-compressed
 
-UPX-сжатые сборки **awg-manager** и **sing-box** для Keenetic + Entware, плюс установщик с меню на роутере.
+UPX-сжатые сборки **awg-manager** и **sing-box** для Keenetic + Entware, плюс интерактивный установщик на роутере.
 
 | | |
 |---|---|
-| Релиз с файлами | [Releases → `compressed`](https://github.com/rndnaame/awg-compressed/releases/tag/upx) |
+| Релиз с актуальными файлами | [Releases → **Latest** (`upx`)](https://github.com/rndnaame/awg-compressed/releases/tag/upx) |
 | Установщик | [`install-compressed.sh`](https://github.com/rndnaame/awg-compressed/blob/main/install-compressed.sh) |
-| Исходники пакетов | [hoaxisr/awg-manager](https://github.com/hoaxisr/awg-manager), [hoaxisr/amnezia-box](https://github.com/hoaxisr/amnezia-box), зеркало [repo.hoaxisr.ru](http://repo.hoaxisr.ru) |
+| Исходники | [hoaxisr/awg-manager](https://github.com/hoaxisr/awg-manager), [hoaxisr/amnezia-box](https://github.com/hoaxisr/amnezia-box), зеркало [repo.hoaxisr.ru](http://repo.hoaxisr.ru) |
 
-GitHub Actions раз в ~8 часов проверяет зеркало и публикует:
+GitHub Actions (каждые 12 часов / вручную) проверяет зеркало и публикует:
 
-| Релиз | Пример | Поведение |
-|-------|--------|-----------|
-| **Топик awg-manager** | `v2.17.4 (awg-manager UPX)` → тег `awgm-2.17.4` | архив, **остаётся навсегда** |
-| **Топик sing-box** | `…awgm.15 (sing-box UPX)` → тег `sb-…` | архив, **остаётся навсегда** |
-| **Latest** | тег **`compressed`** | **только крайние** версии; старые файлы из этого тега удаляются |
+| Релиз | Тег | Поведение |
+|-------|-----|-----------|
+| **Latest** | **`upx`** | только крайние UPX-версии; обновляется при появлении новых |
+| **Топик awg-manager** | `awgm-2.19.x` | архив, **не удаляется** |
+| **Топик sing-box** | `sb-1.15.0-…` | архив, **не удаляется** |
 
-Установщик всегда берёт файлы из `compressed`. Старые сборки смотрите в топиках `awgm-*` / `sb-*`.
+Установщик берёт актуальные UPX-файлы из тега **`upx`**. Старые сборки — в топиках `awgm-*` / `sb-*`.
+
+Если на зеркале ничего нового — workflow **ничего не пересобирает и релиз не трогает**.
 
 ---
 
-## Установка на роутер (одна команда)
+## Установка на роутер
 
 ```sh
 curl -sL https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh | sh
@@ -32,38 +34,60 @@ curl -sL https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-
 wget -qO- https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh | sh
 ```
 
-Нужны: Entware, `opkg`, root. Архитектура определяется сама.
+Нужны: **Entware**, `opkg`, root. Архитектура определяется как в [nfqws-menu](https://github.com/rndnaame/nfqws-menu): `opkg print-architecture` → `opkg.conf` → `uname` (mips на Keenetic не используется).
 
 ### Меню
 
 ```
-Что сделать?
+Выбрать пакет для установки:
 
-  awg-manager
-    [1]  официальный  · выбор версии     ← по умолчанию
-    [2]  UPX          · последняя
+  AWG-Manager
+    [1]  официальная версия  ~28M
+    [2]  UPX версия (сжатая)  ~8M
 
-  sing-box
-    [3]  UPX          · последняя
-    [4]  UPX          · выбор версии
+  Sing-Box
+    [3]  официальная версия  ~59M
+    [4]  UPX версия (сжатая)  ~13M
 
-  вместе / прочее
-    [5]  оба UPX      · awg-manager + sing-box
-    [6]  Настроить доступ через туннель
-    [0]  отмена
+  прочее
+    [5]  Настроить доступ через туннель
+    [88] Удаление компонентов
+    [0]  выход
 ```
 
 | Пункт | Что делает |
 |-------|------------|
-| **1** | **Официальный** (несжатый) IPK с GitHub/зеркала, выбор версии |
-| **2** | Сжатый IPK awg-manager из release `compressed` (последняя) |
-| **3** | Сжатый бинарник sing-box из `compressed` (последняя) |
-| **4** | Сжатый бинарник sing-box из архивных топиков `sb-*`, выбор версии |
-| **5** | Пункты 2 + 3 (awg-manager + sing-box UPX) |
-| **6** | Настроить доступ через туннель (WG / ZeroTier) |
+| **1** | Официальный IPK awg-manager (hoaxisr + зеркало), выбор версии |
+| **2** | UPX IPK awg-manager из топиков `awgm-*`, выбор версии |
+| **3** | Официальный бинарник sing-box (hoaxisr/amnezia-box), выбор версии |
+| **4** | UPX бинарник sing-box из топиков `sb-*`, выбор версии |
+| **5** | Доступ к AWG Manager через туннель (WG / ZeroTier), встроенный модуль |
+| **88** | Удаление: Sing-Box / AWG-Manager / полное |
+| **0** | Выход |
 
-Для пунктов **1** и **4**: `Номер (1–N) или версия (Enter = последняя, 0 = выход)`.  
-Для пунктов **2 / 3 / 5** скрипт сравнивает версии: предложит обновить, переустановить или пропустить.
+**Подменю версий (1–4):** номер `1–N` или строка версии; `cN` — changelog; **Enter / 0** — в главное меню.  
+**Главное меню:** **Enter / [0]** — выход.
+
+При установке awg-manager: `opkg update`, зависимости (`ip-full`, `wireguard-tools`, `conntrack`), при ошибке — `--force-depends`.  
+Перед force-reinstall / force-downgrade — предупреждение о бэкапе.
+
+### Удаление [88]
+
+| Подпункт | Действие |
+|----------|----------|
+| **1** | Удалить Sing-Box (`sing-box`, meta, bak) |
+| **2** | `opkg remove awg-manager` (конфиг сохраняется) |
+| **3** | Полное удаление (см. ниже) |
+
+Полное удаление:
+
+```sh
+opkg remove awg-manager
+rm -f /opt/etc/opkg/awg_manager.conf
+rm -rf /opt/etc/awg-manager /opt/etc/awg-manager.pre-restore-*
+ndmc -c "no ip host awgm-dnscheck.test"
+ndmc -c "system configuration save"
+```
 
 ---
 
@@ -71,40 +95,42 @@ wget -qO- https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install
 
 | Компонент | Путь |
 |-----------|------|
-| awg-manager | через `opkg install` (пакет) |
+| awg-manager | через `opkg install` |
 | sing-box | `/opt/etc/awg-manager/singbox/sing-box` |
+| версия sing-box | `/opt/etc/awg-manager/singbox/sing-box.meta.json` |
 
-Бэкап старого sing-box (`sing-box.bak`) — **только если согласитесь** (или `BACKUP_SB=1`).
+Бэкап `sing-box.bak` — только по согласию (или `BACKUP_SB=1`).
 
 ---
 
 ## Архитектуры
 
-| Entware | IPK / sing-box |
-|---------|----------------|
-| aarch64 | `aarch64-3.10-kn` / `aarch64-3.10` |
-| mipsel | `mipsel-3.4-kn` / `mipsel-3.4` |
-| mips | `mips-3.4-kn` / `mips-3.4` |
+| ARCH | IPK | sing-box |
+|------|-----|----------|
+| aarch64 | `aarch64-3.10-kn` | `aarch64-3.10` |
+| mipsel | `mipsel-3.4-kn` | `mipsel-3.4` |
+| mips | `mips-3.4-kn` | `mips-3.4` |
 
 ```sh
 opkg print-architecture
+# или
+grep -E '^arch |^src' /opt/etc/opkg.conf
 ```
 
 ---
 
-## Если GitHub не открывается
+## Скачивание (если GitHub недоступен)
 
-Скачивание идёт по очереди через интерфейсы (таймаут ~45 с на каждый):
+Порядок:
 
-1. `nwg0`, `nwg1`  
-2. `t2s0`, `t2s1`  
-3. `opkgtun10`, `awgm0`  
-4. обычный канал (default)
+1. **Напрямую** (короткий таймаут)
+2. **Зеркала** GitHub (`gh-proxy.com`, `ghfast.top`, …)
+3. **Туннель-интерфейсы:** `nwg0`, `nwg1`, `t2s0`, `t2s1`, `opkgtun10`, `awgm0`, default
 
 Свой список:
 
 ```sh
-DL_IFACES="nwg0 opkgtun10" DL_TIMEOUT=60 \
+DL_IFACES="nwg0 t2s0" DL_TIMEOUT=60 \
   sh -c "$(curl -sL https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh)"
 ```
 
@@ -118,29 +144,29 @@ DL_IFACES="nwg0 opkgtun10" DL_TIMEOUT=60 \
 | Только UPX sing-box | `INSTALL_AWG=0 INSTALL_SB=1` |
 | Оба UPX | `INSTALL_AWG=1 INSTALL_SB=1` |
 | Бэкап sing-box | `BACKUP_SB=1` |
-
-Пример:
+| Без цветов | `NO_COLOR=1` |
 
 ```sh
 INSTALL_AWG=1 INSTALL_SB=0 sh -c "$(curl -sL https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh)"
 ```
 
-Пункты **1** / **4** (выбор версии) и **6** (туннель) в неинтерактивном режиме не вызываются — только через меню.
+Неинтерактивный режим ставит **последние UPX** из тега `upx` (пункты 1–5, 88 — только через меню).
 
 ---
 
-## Ручное скачивание из release
+## Ручное скачивание
 
-[Список файлов](https://github.com/rndnaame/awg-compressed/releases/tag/compressed)
+[Ассеты Latest](https://github.com/rndnaame/awg-compressed/releases/tag/upx)
 
 ```sh
-# пример aarch64 — VERSION смотрите в релизе
+# VERSION — из имени файла в релизе
 wget -O /tmp/awg.ipk \
-  "https://github.com/rndnaame/awg-compressed/releases/download/compressed/awg-manager_VERSION_aarch64-3.10-kn_compressed.ipk"
+  "https://github.com/rndnaame/awg-compressed/releases/download/upx/awg-manager_VERSION_aarch64-3.10-kn_compressed.ipk"
 opkg install /tmp/awg.ipk
 
+mkdir -p /opt/etc/awg-manager/singbox
 wget -O /opt/etc/awg-manager/singbox/sing-box \
-  "https://github.com/rndnaame/awg-compressed/releases/download/compressed/singbox-VERSION-aarch64-3.10_compressed"
+  "https://github.com/rndnaame/awg-compressed/releases/download/upx/singbox-VERSION-aarch64-3.10_compressed"
 chmod +x /opt/etc/awg-manager/singbox/sing-box
 ```
 
@@ -148,14 +174,14 @@ chmod +x /opt/etc/awg-manager/singbox/sing-box
 
 ## Автосборка (GitHub Actions)
 
-Файл: [`.github/workflows/compress.yml`](.github/workflows/compress.yml)
+[`.github/workflows/compress.yml`](.github/workflows/compress.yml)
 
-1. Сравнивает версии на `repo.hoaxisr.ru` с ассетами release `compressed`
-2. Если всё уже есть — **выходит без работы**
-3. Иначе качает только недостающее, UPX (`-9 --lzma`, с таймаутом), публикует
+1. Сравнивает `repo.hoaxisr.ru` с ассетами тега **`upx`**
+2. Если всё актуально — **выход, релиз не пересоздаётся**
+3. Иначе: UPX (`-9 --lzma`), топик-релиз + обновление **Latest**
+4. UPX-бинарь качается **только если есть что сжимать**
 
-Запуск вручную: **Actions → Compress AWG + sing-box → Run workflow**  
-(не «Re-run» старого job — там может быть старый yaml).
+Запуск: **Actions → Compress AWG + sing-box → Run workflow**
 
 ---
 
@@ -163,8 +189,7 @@ chmod +x /opt/etc/awg-manager/singbox/sing-box
 
 | Файл | Назначение |
 |------|------------|
-| `install-compressed.sh` | Меню и установка на роутере |
-| `awg-manager-tunnel-access.sh` | Пункт [5]: доступ через WG (оригинал: [genaRijoff/awgm_tun_wgX](https://github.com/genaRijoff/awgm_tun_wgX)) |
+| `install-compressed.sh` | Меню, установка, туннель [5], удаление [88] |
 | `.github/workflows/compress.yml` | Автосжатие и публикация |
 | `README.md` | Документация |
 
@@ -174,17 +199,16 @@ chmod +x /opt/etc/awg-manager/singbox/sing-box
 
 | Симптом | Что сделать |
 |---------|-------------|
-| Скачивание долго / таймауты | Поднять туннель (`nwg0` и т.п.) или `DL_IFACES=...` |
-| «Неизвестная архитектура» | `opkg print-architecture` — нужны aarch64 / mipsel / mips |
-| opkg ругается на версию | Согласиться на обновление в меню или `opkg install --force-reinstall …` |
-| Пункт [5] крутит меню | Обновить `awg-manager-tunnel-access.sh` в `main` (чтение с `/dev/tty`) |
-| Release без новых файлов | Actions → **Run workflow**; в логе должны быть `SKIP` / `BUILD` |
-
-sing-box:
+| «Неизвестная архитектура: пусто» | Проверьте `PATH` (`/opt/bin`), `opkg print-architecture`, `opkg.conf` |
+| Скачивание долго / таймауты | Туннель (`nwg0`…) или `DL_IFACES=…` |
+| opkg: нет ip-full / wireguard-tools | Скрипт ставит зависимости сам; иначе `opkg update && opkg install ip-full wireguard-tools conntrack` |
+| «incompatible with the architectures» | После deps — повтор с `--force-depends` (скрипт делает сам) |
+| Пункт [5] / jq | Предлагается установить `jq` через opkg |
+| Release без новых файлов | Норма, если версии уже в `upx`; иначе Actions → **Run workflow** |
 
 ```sh
-chmod +x /opt/etc/awg-manager/singbox/sing-box
 /opt/etc/awg-manager/singbox/sing-box version
+opkg list-installed | grep awg-manager
 ```
 
 ---
@@ -192,6 +216,7 @@ chmod +x /opt/etc/awg-manager/singbox/sing-box
 ## Дисклеймер
 
 Проект **не связан** с авторами awg-manager, Amnezia и sing-box.  
-Это вспомогательная автоматизация сжатия публичных сборок и удобный установщик.
+Вспомогательная автоматизация сжатия публичных сборок и установщик.
 
 Используйте на свой страх и риск. Перед обновлением сохраните доступ к роутеру по LAN.
+'''

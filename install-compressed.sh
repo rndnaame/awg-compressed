@@ -470,70 +470,154 @@ install_awg_ipk() {
 # ---------------------------------------------------------------------------
 # Архитектура и установленные версии
 # ---------------------------------------------------------------------------
-detect_arch() {
-  # 1) opkg print-architecture (нужен PATH с /opt/bin)
-  A=""
+# Нормализация как в nfqws-menu: mipsel* ДО mips*
+_arch_normalize() {
+  case "$1" in
+    aarch64*|arm64*)                    echo "aarch64" ;;
+    armv7*|armv6*|arm*)                 echo "" ;;
+    mipsel*|mipselsf*|mips64el*)        echo "mipsel" ;;
+    mips*|mipssf*)                      echo "mips" ;;
+    x86_64*|amd64*|x64*)                echo "x86_64" ;;
+    i[3-6]86*|x86*|i686*)               echo "x86" ;;
+    *)                                  echo "" ;;
+  esac
+}
+
+# Лучшая строка «arch NAME PRIORITY» (opkg print-architecture / opkg.conf)
+_arch_pick_best() {
+  awk '
+    $1 == "arch" && $2 != "" && $2 != "all" && $2 != "noarch" {
+      p = $3 + 0
+      n = $2
+      bonus = 0
+      if (n ~ /^mipsel/ || n ~ /^mipselsf/ || n ~ /^mips64el/) bonus = 2
+      else if (n ~ /^aarch64/ || n ~ /^arm64/) bonus = 2
+      score = p * 10 + bonus
+      if (score > best) { best = score; name = n }
+    }
+    END { if (name != "") print name }
+  '
+}
+
+_arch_from_opkg() {
   for _opkg in opkg /opt/bin/opkg /opt/sbin/opkg; do
     command -v "$_opkg" >/dev/null 2>&1 || [ -x "$_opkg" ] || continue
-    A=$("$_opkg" print-architecture 2>/dev/null | sort -k3 -nr | awk '$2!="all" && $2!="noarch"{print $2;exit}')
-    [ -n "$A" ] && break
+    _r=$("$_opkg" print-architecture 2>/dev/null | _arch_pick_best)
+    if [ -n "$_r" ]; then
+      echo "$_r"
+      return 0
+    fi
   done
-  # 2) /opt/etc/opkg.conf — строки "arch NAME PRIORITY"
-  if [ -z "$A" ] && [ -f /opt/etc/opkg.conf ]; then
-    A=$(awk '/^arch / && $2!="all" && $2!="noarch"{print $2; exit}' /opt/etc/opkg.conf)
+  return 1
+}
+
+# /opt/etc/opkg.conf — arch … или URL src/gz (mipselsf-k3.4, aarch64-k3.10, …)
+_arch_from_opkg_conf() {
+  _conf="${1:-/opt/etc/opkg.conf}"
+  [ -f "$_conf" ] || return 1
+  _name=$(grep -E '^[[:space:]]*arch[[:space:]]+' "$_conf" 2>/dev/null | _arch_pick_best)
+  if [ -n "$_name" ]; then
+    echo "$_name"
+    return 0
   fi
-  # 3) uname / cpuinfo (mipsel vs mips)
-  if [ -z "$A" ]; then
-    _m=$(uname -m 2>/dev/null || true)
-    case "$_m" in
-      aarch64|arm64|armv8*) A="aarch64" ;;
-      arm*)                 A="arm" ;;
-      mips*)
-        if grep -qi 'little endian' /proc/cpuinfo 2>/dev/null; then
-          A="mipsel"
-        else
-          A="mips"
+  _from_url=""
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    case "$_line" in
+      src/gz*|src\ *)
+        case "$_line" in
+          *mipselsf*|*mips64el*) _from_url="mipselsf"; break ;;
+          *mipssf*)              _from_url="mipssf"; break ;;
+          *aarch64*|*arm64*)     _from_url="aarch64"; break ;;
+          */x64*|*x86_64*)       _from_url="x86_64"; break ;;
+          */x86*|*i386*)         _from_url="x86"; break ;;
+        esac
+        ;;
+    esac
+  done < "$_conf"
+  [ -n "$_from_url" ] && echo "$_from_url" && return 0
+  return 1
+}
+
+detect_arch() {
+  ARCH=""
+  ARCH_RAW=""
+  ARCH_SOURCE=""
+
+  # 1) opkg print-architecture (как nfqws-menu)
+  ARCH_RAW=$(_arch_from_opkg) || ARCH_RAW=""
+  ARCH=$(_arch_normalize "$ARCH_RAW")
+  [ -n "$ARCH" ] && ARCH_SOURCE="opkg"
+
+  # 2) /opt/etc/opkg.conf
+  if [ -z "$ARCH" ]; then
+    ARCH_RAW=$(_arch_from_opkg_conf /opt/etc/opkg.conf) || ARCH_RAW=""
+    ARCH=$(_arch_normalize "$ARCH_RAW")
+    [ -n "$ARCH" ] && ARCH_SOURCE="conf"
+  fi
+
+  # 3) uname -m — mips* на Keenetic часто врёт, не используем (как nfqws-menu)
+  if [ -z "$ARCH" ]; then
+    _um=$(uname -m 2>/dev/null || true)
+    case "$_um" in
+      mips|mipsel|mips64|mips64el|"") ;;
+      *)
+        _cand=$(_arch_normalize "$_um")
+        if [ -n "$_cand" ]; then
+          ARCH="$_cand"
+          ARCH_RAW="$_um"
+          ARCH_SOURCE="uname"
         fi
         ;;
     esac
   fi
 
-  case "$A" in
-    aarch64*|arm*)
-      ARCH=aarch64
+  case "$ARCH" in
+    aarch64)
       IPK_PAT="awg-manager_.*_aarch64-3.10-kn_compressed\\.ipk"
       SB_PAT="singbox-.*-aarch64-3.10_compressed"
       ARCH_SUFFIX="aarch64-3.10-kn"
       ARCH_REPO="aarch64-k3.10"
       ;;
-    mipsel*)
-      ARCH=mipsel
+    mipsel)
       IPK_PAT="awg-manager_.*_mipsel-3.4-kn_compressed\\.ipk"
       SB_PAT="singbox-.*-mipsel-3.4_compressed"
       ARCH_SUFFIX="mipsel-3.4-kn"
       ARCH_REPO="mipsel-k3.4"
       ;;
-    mips*)
-      ARCH=mips
+    mips)
       IPK_PAT="awg-manager_.*_mips-3.4-kn_compressed\\.ipk"
       SB_PAT="singbox-.*-mips-3.4_compressed"
       ARCH_SUFFIX="mips-3.4-kn"
       ARCH_REPO="mips-k3.4"
       ;;
     *)
-      printf '%b\n' "${red}❌ Неизвестная архитектура: ${A:-пусто}${reset}"
-      echo "Диагностика:"
+      printf '%b\n' "${red}❌ Неизвестная архитектура: ${ARCH_RAW:-пусто}${reset}"
+      echo "Диагностика (как nfqws-menu: opkg → opkg.conf → uname):"
       echo "  PATH=$PATH"
       echo "  which opkg: $(command -v opkg 2>/dev/null || echo нет)"
       echo "  opkg print-architecture:"
       (opkg print-architecture 2>&1 || /opt/bin/opkg print-architecture 2>&1 || true) | sed 's/^/    /'
       echo "  uname -m: $(uname -m 2>/dev/null || echo ?)"
-      [ -f /opt/etc/opkg.conf ] && echo "  opkg.conf arch:" && grep -E '^arch ' /opt/etc/opkg.conf 2>/dev/null | sed 's/^/    /'
+      if [ -f /opt/etc/opkg.conf ]; then
+        echo "  opkg.conf:"
+        grep -E '^[[:space:]]*(arch|src)' /opt/etc/opkg.conf 2>/dev/null | sed 's/^/    /' || true
+      else
+        echo "  opkg.conf: нет"
+      fi
       exit 1
       ;;
   esac
-  echo "✅ Архитектура: $A → $ARCH"
+
+  # A — для совместимости со старым выводом
+  A="${ARCH_RAW:-$ARCH}"
+  case "$ARCH_SOURCE" in
+    opkg) printf '%b\n' "✅ Архитектура: $A → $ARCH" ;;
+    conf) printf '%b\n' "${yellow}✅ Архитектура: $A → $ARCH${reset} (из opkg.conf)" ;;
+    uname) printf '%b\n' "${yellow}✅ Архитектура: $A → $ARCH${reset} (из uname)" ;;
+    *) echo "✅ Архитектура: $A → $ARCH" ;;
+  esac
 }
+
 
 
 # Размер файла в человекочитаемом виде (напр. 3.2M)
@@ -959,9 +1043,10 @@ run_menu() {
     echo ""
     echo "  прочее"
     echo "    [5]  Настроить доступ через туннель"
+    echo "    [88] Удаление компонентов"
     echo "    [0]  выход"
     echo ""
-    choice=$(ask "Выбор [0-5], Enter = выход: " "0")
+    choice=$(ask "Выбор [0-5/88], Enter = выход: " "0")
     case "$choice" in
       1)
         if install_awg_version_select; then
@@ -989,6 +1074,10 @@ run_menu() {
         ;;
       5)
         run_tunnel_access || true
+        echo ""
+        ;;
+      88)
+        run_remove_components || true
         echo ""
         ;;
       0|n|N|q|Q)
@@ -1589,6 +1678,114 @@ install_sb_version_select() {
   rm -f "$sb_name"
   echo "🎉 Установлен sing-box $ver_disp (UPX)"
   return 0
+}
+
+# ---------------------------------------------------------------------------
+# Пункт [88]: удаление компонентов
+# ---------------------------------------------------------------------------
+remove_singbox() {
+  print_submenu "Удаление Sing-Box"
+  if [ ! -x "$SINGBOX_DIR/sing-box" ] && [ ! -f "$SINGBOX_DIR/sing-box.meta.json" ]; then
+    echo "sing-box не найден — нечего удалять"
+    return 0
+  fi
+  echo "Будет удалено:"
+  echo "  $SINGBOX_DIR/sing-box"
+  echo "  $SINGBOX_DIR/sing-box.meta.json"
+  echo "  $SINGBOX_DIR/sing-box.bak (если есть)"
+  if [ "$(yes_no "Удалить Sing-Box? [y/N]: " "n")" != "1" ]; then
+    echo "→ отменено"
+    return 0
+  fi
+  rm -f "$SINGBOX_DIR/sing-box" "$SINGBOX_DIR/sing-box.meta.json" "$SINGBOX_DIR/sing-box.bak" 2>/dev/null || true
+  # каталог, если пуст
+  rmdir "$SINGBOX_DIR" 2>/dev/null || true
+  printf '%b\n' "${green}OK: Sing-Box удалён${reset}"
+}
+
+remove_awg_manager() {
+  print_submenu "Удаление AWG-Manager"
+  _inst=$(opkg list-installed 2>/dev/null | awk '/^awg-manager /{print $0; exit}')
+  if [ -z "$_inst" ]; then
+    echo "awg-manager не установлен через opkg"
+  else
+    echo "Установлен: $_inst"
+  fi
+  echo "Будет выполнено: opkg remove awg-manager"
+  echo "  (конфиг /opt/etc/awg-manager сохраняется)"
+  if [ "$(yes_no "Удалить пакет awg-manager? [y/N]: " "n")" != "1" ]; then
+    echo "→ отменено"
+    return 0
+  fi
+  # остановить сервис, если есть
+  if [ -x /opt/etc/init.d/S99awg-manager ]; then
+    /opt/etc/init.d/S99awg-manager stop 2>/dev/null || true
+  fi
+  if opkg remove awg-manager 2>/dev/null; then
+    printf '%b\n' "${green}OK: awg-manager удалён (opkg)${reset}"
+  else
+    printf '%b\n' "${yellow}⚠ opkg remove не удался — пробуем --force-depends${reset}"
+    opkg remove --force-depends awg-manager 2>/dev/null || true
+  fi
+}
+
+remove_awg_full() {
+  print_submenu "Полное удаление AWG-Manager + Sing-Box"
+  echo "Будет выполнено:"
+  echo "  opkg remove awg-manager"
+  echo "  rm -f /opt/etc/opkg/awg_manager.conf"
+  echo "  rm -rf /opt/etc/awg-manager /opt/etc/awg-manager.pre-restore-*"
+  echo "  ndmc -c \"no ip host awgm-dnscheck.test\""
+  echo "  ndmc -c \"system configuration save\""
+  echo ""
+  printf '%b\n' "${red}ВНИМАНИЕ: удалятся все настройки AWG Manager!${reset}"
+  if [ "$(yes_no "Продолжить полное удаление? [y/N]: " "n")" != "1" ]; then
+    echo "→ отменено"
+    return 0
+  fi
+
+  if [ -x /opt/etc/init.d/S99awg-manager ]; then
+    echo "→ остановка S99awg-manager ..."
+    /opt/etc/init.d/S99awg-manager stop 2>/dev/null || true
+  fi
+
+  echo "→ opkg remove awg-manager ..."
+  opkg remove awg-manager 2>/dev/null || opkg remove --force-depends awg-manager 2>/dev/null || true
+
+  echo "→ удаление conf и каталогов ..."
+  rm -f /opt/etc/opkg/awg_manager.conf 2>/dev/null || true
+  rm -rf /opt/etc/awg-manager 2>/dev/null || true
+  rm -rf /opt/etc/awg-manager.pre-restore-* 2>/dev/null || true
+
+  if command -v ndmc >/dev/null 2>&1; then
+    echo "→ ndmc: no ip host awgm-dnscheck.test"
+    ndmc -c "no ip host awgm-dnscheck.test" 2>/dev/null || true
+    echo "→ ndmc: system configuration save"
+    ndmc -c "system configuration save" 2>/dev/null || true
+  else
+    printf '%b\n' "${yellow}⚠ ndmc не найден — шаг Keenetic пропущен${reset}"
+  fi
+
+  printf '%b\n' "${green}OK: полное удаление выполнено${reset}"
+}
+
+run_remove_components() {
+  while true; do
+    print_submenu "Удаление компонентов"
+    echo "  [1]  Удалить Sing-Box"
+    echo "  [2]  Удалить AWG-Manager (пакет, конфиг сохранить)"
+    echo "  [3]  Полное удаление (пакет + конфиги + DNS-check)"
+    echo "  [0]  в главное меню"
+    echo ""
+    _c=$(ask "Выбор [0-3], Enter = назад: " "0")
+    case "$_c" in
+      1) remove_singbox; echo "" ;;
+      2) remove_awg_manager; echo "" ;;
+      3) remove_awg_full; echo "" ;;
+      0|"") return 0 ;;
+      *) echo "Неверный выбор."; echo "" ;;
+    esac
+  done
 }
 
 # Пункт [5]: доступ через туннель (встроено, без скачивания)
