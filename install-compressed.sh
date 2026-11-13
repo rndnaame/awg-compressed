@@ -2139,19 +2139,6 @@ add_interface_to_awg() {
     return 0
 }
 
-remove_interface_from_awg() {
-    linux="$1"
-
-    interface_present "$linux" || return 0
-
-    jq --arg i "$linux" \
-       '.server.interfaces = ((.server.interfaces // []) - [$i])' \
-       "$AWG_SETTINGS" > "$TMP_SETTINGS" 2>/dev/null
-
-    commit_settings "$TMP_SETTINGS" || { rm -f "$TMP_SETTINGS"; return 1; }
-    return 0
-}
-
 # ---------------------------------------------------------------------------
 # Tunnel interface discovery (WireGuard + ZeroTier, Keenetic CLI)
 # ---------------------------------------------------------------------------
