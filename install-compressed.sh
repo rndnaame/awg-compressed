@@ -577,18 +577,21 @@ detect_arch() {
       SB_PAT="singbox-.*-aarch64-3.10_compressed"
       ARCH_SUFFIX="aarch64-3.10-kn"
       ARCH_REPO="aarch64-k3.10"
+      SB_ARCH_SUFFIX="aarch64-3.10"
       ;;
     mipsel)
       IPK_PAT="awg-manager_.*_mipsel-3.4-kn_compressed\\.ipk"
       SB_PAT="singbox-.*-mipsel-3.4_compressed"
       ARCH_SUFFIX="mipsel-3.4-kn"
       ARCH_REPO="mipsel-k3.4"
+      SB_ARCH_SUFFIX="mipsel-3.4"
       ;;
     mips)
       IPK_PAT="awg-manager_.*_mips-3.4-kn_compressed\\.ipk"
       SB_PAT="singbox-.*-mips-3.4_compressed"
       ARCH_SUFFIX="mips-3.4-kn"
       ARCH_REPO="mips-k3.4"
+      SB_ARCH_SUFFIX="mips-3.4"
       ;;
     *)
       printf '%b\n' "${red}❌ Неизвестная архитектура: ${ARCH_RAW:-пусто}${reset}"
@@ -1234,447 +1237,220 @@ install_sb_upx() {
   fi
 }
 
+
+# Теги релизов из JSON API GitHub
+github_tag_list() {
+  _json="${1:-}"
+  _flt="${2:-}"
+  _tags=$(printf '%s' "$_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//g' | grep -v '^latest$' || true)
+  if [ -n "$_flt" ]; then
+    echo "$_tags" | grep -E -- "$_flt" | head -15
+  else
+    echo "$_tags" | head -15
+  fi
+}
+
+# $1=tags  $2=API_JSON  $3=strip_prefix  $4=tag_prefix → PICKED_TAG; 2=назад
+prompt_pick_version() {
+  _versions="$1"
+  _api="$2"
+  _strip="${3:-}"
+  _pfx="${4:-}"
+  PICKED_TAG=""
+  [ -n "$_versions" ] || return 1
+  _list="/tmp/ver-pick-$$.lst"
+  echo "$_versions" > "$_list"
+  echo ""
+  printf "%b\n" "${light_blue}Доступные версии:${reset}"
+  i=1
+  while read -r v; do
+    [ -n "$v" ] || continue
+    _disp="$v"
+    [ -n "$_strip" ] && _disp="${v#$_strip}"
+    echo "   $i) $_disp"
+    i=$((i + 1))
+  done < "$_list"
+  max=$((i - 1))
+  [ "$max" -ge 1 ] || { rm -f "$_list"; return 1; }
+  echo "   (cN — changelog, напр. c2; Enter/0 — в меню)"
+  while true; do
+    c=$(ask "Номер (1-$max) или версия (Enter/0 = в меню): " "")
+    if [ -z "$c" ] || [ "$c" = "0" ]; then
+      echo "→ главное меню"
+      rm -f "$_list"
+      return 2
+    elif echo "$c" | grep -q '^[cCсС][0-9][0-9]*$'; then
+      cl_num=$(echo "$c" | sed 's/[^0-9]//g')
+      cl_tag=$(sed -n "${cl_num}p" "$_list")
+      if [ -n "$cl_tag" ]; then show_changelog "$_api" "$cl_tag"
+      else echo "❌ Нет версии под номером $cl_num"; fi
+    elif echo "$c" | grep -qE '^[0-9]+$'; then
+      if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
+        PICKED_TAG=$(sed -n "${c}p" "$_list"); break
+      else echo "❌ Номер вне диапазона 1-$max"; fi
+    else
+      if [ -n "$_pfx" ]; then
+        case "$c" in "$_pfx"*) PICKED_TAG="$c" ;; *) PICKED_TAG="${_pfx}$c" ;; esac
+      else PICKED_TAG="$c"; fi
+      break
+    fi
+  done
+  rm -f "$_list"
+  return 0
+}
+
+# $1=bin  $2=version  $3=kind
+install_sb_binary() {
+  _src="$1"; _ver="$2"; _kind="$3"
+  mkdir -p "$SINGBOX_DIR"
+  if [ -x "$SINGBOX_DIR/sing-box" ]; then
+    do_bak=0
+    if [ -n "$BACKUP_SB" ]; then
+      case "$BACKUP_SB" in 1|y|Y|yes|YES) do_bak=1 ;; esac
+    else
+      [ "$(yes_no "Сохранить старый sing-box как sing-box.bak? [y/N]: " "n")" = "1" ] && do_bak=1
+    fi
+    if [ "$do_bak" = "1" ]; then
+      cp "$SINGBOX_DIR/sing-box" "$SINGBOX_DIR/sing-box.bak" 2>/dev/null || true
+      echo "   💾 бэкап → $SINGBOX_DIR/sing-box.bak"
+    fi
+  fi
+  cp "$_src" "$SINGBOX_DIR/sing-box"
+  chmod +x "$SINGBOX_DIR/sing-box"
+  write_sb_meta "$_ver" "$_kind"
+  echo "✅ sing-box $_ver → $SINGBOX_DIR/sing-box"
+  echo "   version: $_ver"
+}
+
 # Пункт [1]: официальный IPK с выбором версии
 install_awg_version_select() {
   print_submenu "AWG-Manager — официальная версия"
-
-  S="$ARCH_SUFFIX"
-  R="$ARCH_REPO"
-  if [ -z "$S" ] || [ -z "$R" ]; then
-    echo "❌ Неизвестная архитектура: $ARCH"
-    return 1
-  fi
+  S="$ARCH_SUFFIX"; R="$ARCH_REPO"
+  if [ -z "$S" ] || [ -z "$R" ]; then echo "❌ Неизвестная архитектура: $ARCH"; return 1; fi
   echo "✅ Архитектура: $A → $S"
-
   mkdir -p /opt/etc/opkg
   echo "src/gz hoaxisr http://repo.hoaxisr.ru/$R" > /opt/etc/opkg/awg_manager.conf
   echo "✅ Репозиторий: http://repo.hoaxisr.ru/$R"
-
   echo "→ Список релизов hoaxisr/awg-manager..."
   API_JSON=$(fetch_github_api "https://api.github.com/repos/hoaxisr/awg-manager/releases?per_page=15" || true)
-  # Быстрый разбор тегов (как awgm-installer)
-  VERSIONS=$(echo "$API_JSON" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//g' | grep -v '^latest$' | head -12)
-
+  VERSIONS=$(github_tag_list "$API_JSON" '^[vV]?[0-9]')
   if [ -z "$VERSIONS" ]; then
     echo "   API пуст, пробуем HTML..."
     HTML=$(fetch_text "https://github.com/hoaxisr/awg-manager/releases" || true)
     VERSIONS=$(echo "$HTML" | grep -oE '/hoaxisr/awg-manager/releases/tag/v[0-9][^"<> ]+' | sed 's|.*/||' | sort -u | sort -Vr | head -12)
   fi
-
-  if [ -z "$VERSIONS" ]; then
-    echo "❌ Не удалось получить список версий"
-    return 1
-  fi
-
-  echo ""
-  printf "%b\n" "${light_blue}Доступные версии:${reset}"
-  i=1
-  echo "$VERSIONS" > /tmp/awg-ver-list.$$
-  while read -r v; do
-    [ -n "$v" ] || continue
-    echo "   $i) ${v#v}"
-    i=$((i + 1))
-  done < /tmp/awg-ver-list.$$
-  max=$((i - 1))
-  echo "   (cN — changelog, напр. c2; Enter/0 — в меню)"
-
-  ver=""
-  while true; do
-    c=$(ask "Номер (1-$max) или версия (Enter/0 = в меню): " "")
-    if [ -z "$c" ] || [ "$c" = "0" ]; then
-      echo "→ главное меню"
-      rm -f /tmp/awg-ver-list.$$
-      return 2
-    elif echo "$c" | grep -q '^[cCсС][0-9][0-9]*$'; then
-      cl_num=$(echo "$c" | sed 's/[^0-9]//g')
-      cl_tag=$(sed -n "${cl_num}p" /tmp/awg-ver-list.$$)
-      if [ -n "$cl_tag" ]; then
-        show_changelog "$API_JSON" "$cl_tag"
-      else
-        echo "❌ Нет версии под номером $cl_num"
-      fi
-      continue
-    elif echo "$c" | grep -qE '^[0-9]+$'; then
-      if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
-        ver=$(sed -n "${c}p" /tmp/awg-ver-list.$$)
-        break
-      else
-        echo "❌ Номер вне диапазона 1-$max"
-      fi
-    else
-      ver="$c"
-      break
-    fi
-  done
-  rm -f /tmp/awg-ver-list.$$
-  ver=${ver#v}
-
+  [ -n "$VERSIONS" ] || { echo "❌ Не удалось получить список версий"; return 1; }
+  prompt_pick_version "$VERSIONS" "$API_JSON" "v" "" || return $?
+  ver=${PICKED_TAG#v}
   ipk_name="awg-manager_${ver}_${S}.ipk"
   url="https://github.com/hoaxisr/awg-manager/releases/download/v${ver}/${ipk_name}"
   url_mirror="http://repo.hoaxisr.ru/${R}/${ipk_name}"
-
-  echo ""
-  echo "📥 Скачивание v$ver ($ipk_name)..."
-  cd /tmp || return 1
-  rm -f "$ipk_name"
-
+  echo ""; echo "📥 Скачивание v$ver ($ipk_name)..."
+  cd /tmp || return 1; rm -f "$ipk_name"
   if ! download_file "$url" "$ipk_name" 100000; then
     echo "   GitHub не удалось — пробуем зеркало..."
     if ! download_file "$url_mirror" "$ipk_name" 100000; then
-      echo "❌ Ошибка скачивания v$ver"
-      return 1
+      echo "❌ Ошибка скачивания v$ver"; return 1
     fi
   fi
-
   if install_awg_ipk "$ipk_name" "$ver"; then
     echo "🎉 Установлен awg-manager v$ver"
   else
-    _rc=$?
-    [ "$_rc" = "2" ] && { rm -f "./$ipk_name"; return 2; }
-    echo "⚠️ Ошибка установки"
-    rm -f "./$ipk_name"
-    return 1
+    _rc=$?; [ "$_rc" = "2" ] && { rm -f "./$ipk_name"; return 2; }
+    echo "⚠️ Ошибка установки"; rm -f "./$ipk_name"; return 1
   fi
   rm -f "./$ipk_name"
   echo "Обновление позже: opkg update && opkg upgrade awg-manager"
   return 0
 }
 
-# Пункт [2]: UPX awg-manager с выбором версии (из топиков awgm-*)
+# Пункт [2]: UPX awg-manager (топики awgm-*)
 install_awg_upx_version_select() {
   print_submenu "AWG-Manager — UPX версия (сжатая)"
-
   S="$ARCH_SUFFIX"
-  if [ -z "$S" ]; then
-    echo "❌ Неизвестная архитектура: $ARCH"
-    return 1
-  fi
+  [ -n "$S" ] || { echo "❌ Неизвестная архитектура: $ARCH"; return 1; }
   echo "✅ Архитектура: $A → $S"
-
   echo "→ Список релизов awg-manager (UPX) из ${REPO}..."
   API_JSON=$(fetch_github_api "https://api.github.com/repos/${REPO}/releases?per_page=40" || true)
-  VERSIONS=$(echo "$API_JSON" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//g' | grep '^awgm-' | head -15)
-
+  VERSIONS=$(github_tag_list "$API_JSON" '^awgm-')
   if [ -z "$VERSIONS" ]; then
     echo "   API пуст, пробуем HTML..."
     HTML=$(fetch_text "https://github.com/${REPO}/releases" || true)
     VERSIONS=$(echo "$HTML" | grep -oE "/${REPO}/releases/tag/awgm-[^\"<> ]+" | sed 's|.*/||' | sort -u | sort -Vr | head -15)
   fi
-
-  if [ -z "$VERSIONS" ]; then
-    echo "❌ Не удалось получить список версий awg-manager UPX"
-    return 1
-  fi
-
-  echo ""
-  printf "%b\n" "${light_blue}Доступные версии:${reset}"
-  i=1
-  echo "$VERSIONS" > /tmp/awgm-upx-list.$$
-  while read -r v; do
-    [ -n "$v" ] || continue
-    disp=${v#awgm-}
-    echo "   $i) $disp"
-    i=$((i + 1))
-  done < /tmp/awgm-upx-list.$$
-  max=$((i - 1))
-  echo "   (cN — changelog, напр. c2; Enter/0 — в меню)"
-
-  ver_tag=""
-  while true; do
-    c=$(ask "Номер (1-$max) или версия (Enter/0 = в меню): " "")
-    if [ -z "$c" ] || [ "$c" = "0" ]; then
-      echo "→ главное меню"
-      rm -f /tmp/awgm-upx-list.$$
-      return 2
-    elif echo "$c" | grep -q '^[cCсС][0-9][0-9]*$'; then
-      cl_num=$(echo "$c" | sed 's/[^0-9]//g')
-      cl_tag=$(sed -n "${cl_num}p" /tmp/awgm-upx-list.$$)
-      if [ -n "$cl_tag" ]; then
-        show_changelog "$API_JSON" "$cl_tag"
-      else
-        echo "❌ Нет версии под номером $cl_num"
-      fi
-      continue
-    elif echo "$c" | grep -qE '^[0-9]+$'; then
-      if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
-        ver_tag=$(sed -n "${c}p" /tmp/awgm-upx-list.$$)
-        break
-      else
-        echo "❌ Номер вне диапазона 1-$max"
-      fi
-    else
-      case "$c" in
-        awgm-*) ver_tag="$c" ;;
-        *)      ver_tag="awgm-$c" ;;
-      esac
-      break
-    fi
-  done
-  rm -f /tmp/awgm-upx-list.$$
-
-  ver_disp=${ver_tag#awgm-}
+  [ -n "$VERSIONS" ] || { echo "❌ Не удалось получить список версий awg-manager UPX"; return 1; }
+  prompt_pick_version "$VERSIONS" "$API_JSON" "awgm-" "awgm-" || return $?
+  ver_tag="$PICKED_TAG"; ver_disp=${ver_tag#awgm-}
   ipk_name="awg-manager_${ver_disp}_${S}_compressed.ipk"
   url="https://github.com/${REPO}/releases/download/${ver_tag}/${ipk_name}"
-
-  echo ""
-  echo "📥 Скачивание $ver_disp ($ipk_name)..."
-  mkdir -p "$TMP"
-  cd "$TMP" || return 1
-  rm -f "$ipk_name"
-
+  echo ""; echo "📥 Скачивание $ver_disp ($ipk_name)..."
+  mkdir -p "$TMP"; cd "$TMP" || return 1; rm -f "$ipk_name"
   if ! download_file "$url" "$ipk_name" 100000; then
-    echo "❌ Ошибка скачивания $ver_disp"
-    echo "   URL: $url"
-    return 1
+    echo "❌ Ошибка скачивания $ver_disp"; echo "   URL: $url"; return 1
   fi
-
   if install_awg_ipk "$ipk_name" "$ver_disp"; then
     echo "🎉 Установлен awg-manager $ver_disp (UPX)"
   else
-    _rc=$?
-    [ "$_rc" = "2" ] && { rm -f "./$ipk_name"; return 2; }
-    echo "⚠️ Ошибка установки"
-    rm -f "./$ipk_name"
-    return 1
+    _rc=$?; [ "$_rc" = "2" ] && { rm -f "./$ipk_name"; return 2; }
+    echo "⚠️ Ошибка установки"; rm -f "./$ipk_name"; return 1
   fi
   rm -f "./$ipk_name"
   return 0
 }
 
-# Пункт [3]: официальный sing-box с выбором версии (hoaxisr/awgm-box)
+# Пункт [3]: официальный sing-box (hoaxisr/awgm-box)
 install_sb_official_version_select() {
   print_submenu "Sing-Box — официальная версия"
-
-  case "$ARCH" in
-    aarch64) SB_ARCH_SUFFIX="aarch64-3.10" ;;
-    mipsel)  SB_ARCH_SUFFIX="mipsel-3.4" ;;
-    mips)    SB_ARCH_SUFFIX="mips-3.4" ;;
-    *)
-      echo "❌ Неизвестная архитектура: $ARCH"
-      return 1
-      ;;
-  esac
+  [ -n "$SB_ARCH_SUFFIX" ] || { echo "❌ Неизвестная архитектура: $ARCH"; return 1; }
   echo "✅ Архитектура: $A → $SB_ARCH_SUFFIX"
-
   echo "→ Список релизов hoaxisr/awgm-box..."
   API_JSON=$(fetch_github_api "https://api.github.com/repos/hoaxisr/awgm-box/releases?per_page=20" || true)
-  VERSIONS=$(echo "$API_JSON" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//g' | grep -v '^latest$' | head -15)
-
+  VERSIONS=$(github_tag_list "$API_JSON")
   if [ -z "$VERSIONS" ]; then
     echo "   API пуст, пробуем HTML..."
     HTML=$(fetch_text "https://github.com/hoaxisr/awgm-box/releases" || true)
     VERSIONS=$(echo "$HTML" | grep -oE '/hoaxisr/awgm-box/releases/tag/[^"<> ]+' | sed 's|.*/||' | grep -v '^latest$' | sort -u | sort -Vr | head -15)
   fi
-
-  if [ -z "$VERSIONS" ]; then
-    echo "❌ Не удалось получить список версий sing-box"
-    return 1
-  fi
-
-  echo ""
-  printf "%b\n" "${light_blue}Доступные версии:${reset}"
-  i=1
-  echo "$VERSIONS" > /tmp/sb-off-list.$$
-  while read -r v; do
-    [ -n "$v" ] || continue
-    echo "   $i) ${v#v}"
-    i=$((i + 1))
-  done < /tmp/sb-off-list.$$
-  max=$((i - 1))
-  echo "   (cN — changelog, напр. c2; Enter/0 — в меню)"
-
-  ver_tag=""
-  while true; do
-    c=$(ask "Номер (1-$max) или версия (Enter/0 = в меню): " "")
-    if [ -z "$c" ] || [ "$c" = "0" ]; then
-      echo "→ главное меню"
-      rm -f /tmp/sb-off-list.$$
-      return 2
-    elif echo "$c" | grep -q '^[cCсС][0-9][0-9]*$'; then
-      cl_num=$(echo "$c" | sed 's/[^0-9]//g')
-      cl_tag=$(sed -n "${cl_num}p" /tmp/sb-off-list.$$)
-      if [ -n "$cl_tag" ]; then
-        show_changelog "$API_JSON" "$cl_tag"
-      else
-        echo "❌ Нет версии под номером $cl_num"
-      fi
-      continue
-    elif echo "$c" | grep -qE '^[0-9]+$'; then
-      if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
-        ver_tag=$(sed -n "${c}p" /tmp/sb-off-list.$$)
-        break
-      else
-        echo "❌ Номер вне диапазона 1-$max"
-      fi
-    else
-      ver_tag="$c"
-      break
-    fi
-  done
-  rm -f /tmp/sb-off-list.$$
-
-  ver_disp=${ver_tag#v}
+  [ -n "$VERSIONS" ] || { echo "❌ Не удалось получить список версий sing-box"; return 1; }
+  prompt_pick_version "$VERSIONS" "$API_JSON" "v" "" || return $?
+  ver_tag="$PICKED_TAG"; ver_disp=${ver_tag#v}
   sb_name="singbox-${ver_disp}-${SB_ARCH_SUFFIX}"
   url="https://github.com/hoaxisr/awgm-box/releases/download/${ver_tag}/${sb_name}"
-
-  echo ""
-  echo "📥 Скачивание $ver_disp ($sb_name)..."
-  mkdir -p "$TMP"
-  cd "$TMP" || return 1
-  rm -f "$sb_name"
-
+  echo ""; echo "📥 Скачивание $ver_disp ($sb_name)..."
+  mkdir -p "$TMP"; cd "$TMP" || return 1; rm -f "$sb_name"
   if ! download_file "$url" "$sb_name" 100000; then
-    echo "❌ Ошибка скачивания $ver_disp"
-    echo "   URL: $url"
-    return 1
+    echo "❌ Ошибка скачивания $ver_disp"; echo "   URL: $url"; return 1
   fi
-
-  mkdir -p "$SINGBOX_DIR"
-
-  if [ -x "$SINGBOX_DIR/sing-box" ]; then
-    do_bak=0
-    if [ -n "$BACKUP_SB" ]; then
-      case "$BACKUP_SB" in
-        1|y|Y|yes|YES) do_bak=1 ;;
-      esac
-    else
-      [ "$(yes_no "Сохранить старый sing-box как sing-box.bak? [y/N]: " "n")" = "1" ] && do_bak=1
-    fi
-    if [ "$do_bak" = "1" ]; then
-      cp "$SINGBOX_DIR/sing-box" "$SINGBOX_DIR/sing-box.bak" 2>/dev/null || true
-      echo "   💾 бэкап → $SINGBOX_DIR/sing-box.bak"
-    fi
-  fi
-
-  cp "$sb_name" "$SINGBOX_DIR/sing-box"
-  chmod +x "$SINGBOX_DIR/sing-box"
-  write_sb_meta "$ver_disp" "official"
-  echo "✅ sing-box $ver_disp → $SINGBOX_DIR/sing-box"
-  echo "   version: $ver_disp"
-
+  install_sb_binary "$sb_name" "$ver_disp" "official"
   rm -f "$sb_name"
   echo "🎉 Установлен sing-box $ver_disp (официальный)"
   return 0
 }
 
-# Пункт [4]: UPX sing-box с выбором версии (из топиков sb-*)
+# Пункт [4]: UPX sing-box (топики sb-*)
 install_sb_version_select() {
   print_submenu "Sing-Box — UPX версия (сжатая)"
-
-  # ARCH уже определён в detect_arch: aarch64 / mipsel / mips
-  case "$ARCH" in
-    aarch64) SB_ARCH_SUFFIX="aarch64-3.10" ;;
-    mipsel)  SB_ARCH_SUFFIX="mipsel-3.4" ;;
-    mips)    SB_ARCH_SUFFIX="mips-3.4" ;;
-    *)
-      echo "❌ Неизвестная архитектура: $ARCH"
-      return 1
-      ;;
-  esac
+  [ -n "$SB_ARCH_SUFFIX" ] || { echo "❌ Неизвестная архитектура: $ARCH"; return 1; }
   echo "✅ Архитектура: $A → $SB_ARCH_SUFFIX"
-
-  echo "→ Список релизов sing-box (UPX) из rndnaame/awg-compressed..."
+  echo "→ Список релизов sing-box (UPX) из ${REPO}..."
   API_JSON=$(fetch_github_api "https://api.github.com/repos/${REPO}/releases?per_page=40" || true)
-  VERSIONS=$(echo "$API_JSON" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//g' | grep '^sb-' | head -15)
-
+  VERSIONS=$(github_tag_list "$API_JSON" '^sb-')
   if [ -z "$VERSIONS" ]; then
     echo "   API пуст, пробуем HTML..."
     HTML=$(fetch_text "https://github.com/${REPO}/releases" || true)
     VERSIONS=$(echo "$HTML" | grep -oE '/rndnaame/awg-compressed/releases/tag/sb-[^"<> ]+' | sed 's|.*/||' | sort -u | sort -Vr | head -15)
   fi
-
-  if [ -z "$VERSIONS" ]; then
-    echo "❌ Не удалось получить список версий sing-box"
-    return 1
-  fi
-
-  echo ""
-  printf "%b\n" "${light_blue}Доступные версии:${reset}"
-  i=1
-  echo "$VERSIONS" > /tmp/sb-ver-list.$$
-  while read -r v; do
-    [ -n "$v" ] || continue
-    # tag: sb-1.14.0-awgm.16 → показываем 1.14.0-awgm.16
-    disp=${v#sb-}
-    echo "   $i) $disp"
-    i=$((i + 1))
-  done < /tmp/sb-ver-list.$$
-  max=$((i - 1))
-  echo "   (cN — changelog, напр. c2; Enter/0 — в меню)"
-
-  ver_tag=""
-  while true; do
-    c=$(ask "Номер (1-$max) или версия (Enter/0 = в меню): " "")
-    if [ -z "$c" ] || [ "$c" = "0" ]; then
-      echo "→ главное меню"
-      rm -f /tmp/sb-ver-list.$$
-      return 2
-    elif echo "$c" | grep -q '^[cCсС][0-9][0-9]*$'; then
-      cl_num=$(echo "$c" | sed 's/[^0-9]//g')
-      cl_tag=$(sed -n "${cl_num}p" /tmp/sb-ver-list.$$)
-      if [ -n "$cl_tag" ]; then
-        show_changelog "$API_JSON" "$cl_tag"
-      else
-        echo "❌ Нет версии под номером $cl_num"
-      fi
-      continue
-    elif echo "$c" | grep -qE '^[0-9]+$'; then
-      if [ "$c" -ge 1 ] && [ "$c" -le "$max" ]; then
-        ver_tag=$(sed -n "${c}p" /tmp/sb-ver-list.$$)
-        break
-      else
-        echo "❌ Номер вне диапазона 1-$max"
-      fi
-    else
-      case "$c" in
-        sb-*) ver_tag="$c" ;;
-        *)    ver_tag="sb-$c" ;;
-      esac
-      break
-    fi
-  done
-  rm -f /tmp/sb-ver-list.$$
-
-  ver_disp=${ver_tag#sb-}
+  [ -n "$VERSIONS" ] || { echo "❌ Не удалось получить список версий sing-box"; return 1; }
+  prompt_pick_version "$VERSIONS" "$API_JSON" "sb-" "sb-" || return $?
+  ver_tag="$PICKED_TAG"; ver_disp=${ver_tag#sb-}
   sb_name="singbox-${ver_disp}-${SB_ARCH_SUFFIX}_compressed"
   url="https://github.com/${REPO}/releases/download/${ver_tag}/${sb_name}"
-
-  echo ""
-  echo "📥 Скачивание $ver_disp ($sb_name)..."
-  mkdir -p "$TMP"
-  cd "$TMP" || return 1
-  rm -f "$sb_name"
-
+  echo ""; echo "📥 Скачивание $ver_disp ($sb_name)..."
+  mkdir -p "$TMP"; cd "$TMP" || return 1; rm -f "$sb_name"
   if ! download_file "$url" "$sb_name" 100000; then
-    echo "❌ Ошибка скачивания $ver_disp"
-    echo "   URL: $url"
-    return 1
+    echo "❌ Ошибка скачивания $ver_disp"; echo "   URL: $url"; return 1
   fi
-
-  mkdir -p "$SINGBOX_DIR"
-
-  # бэкап старого, если есть
-  if [ -x "$SINGBOX_DIR/sing-box" ]; then
-    do_bak=0
-    if [ -n "$BACKUP_SB" ]; then
-      case "$BACKUP_SB" in
-        1|y|Y|yes|YES) do_bak=1 ;;
-      esac
-    else
-      [ "$(yes_no "Сохранить старый sing-box как sing-box.bak? [y/N]: " "n")" = "1" ] && do_bak=1
-    fi
-    if [ "$do_bak" = "1" ]; then
-      cp "$SINGBOX_DIR/sing-box" "$SINGBOX_DIR/sing-box.bak" 2>/dev/null || true
-      echo "   💾 бэкап → $SINGBOX_DIR/sing-box.bak"
-    fi
-  fi
-
-  cp "$sb_name" "$SINGBOX_DIR/sing-box"
-  chmod +x "$SINGBOX_DIR/sing-box"
-  write_sb_meta "$ver_disp" "upx"
-  echo "✅ sing-box $ver_disp → $SINGBOX_DIR/sing-box"
-  echo "   version: $ver_disp"
-
+  install_sb_binary "$sb_name" "$ver_disp" "upx"
   rm -f "$sb_name"
   echo "🎉 Установлен sing-box $ver_disp (UPX)"
   return 0
