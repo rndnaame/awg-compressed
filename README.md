@@ -6,7 +6,7 @@ UPX-сжатые сборки **awg-manager** и **sing-box** для Keenetic + 
 |---|---|
 | Релиз с актуальными файлами | [Releases → **Latest** (`upx`)](https://github.com/rndnaame/awg-compressed/releases/tag/upx) |
 | Установщик | [`install-compressed.sh`](https://github.com/rndnaame/awg-compressed/blob/main/install-compressed.sh) |
-| Исходники | [hoaxisr/awg-manager](https://github.com/hoaxisr/awg-manager), [hoaxisr/amnezia-box](https://github.com/hoaxisr/amnezia-box), зеркало [repo.hoaxisr.ru](http://repo.hoaxisr.ru) |
+| Исходники | [hoaxisr/awg-manager](https://github.com/hoaxisr/awg-manager), [hoaxisr/awgm-box](https://github.com/hoaxisr/awgm-box), зеркало [repo.hoaxisr.ru](http://repo.hoaxisr.ru) |
 
 GitHub Actions (каждые 12 часов / вручную) проверяет зеркало и публикует:
 
@@ -59,7 +59,7 @@ wget -qO- https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install
 |-------|------------|
 | **1** | Официальный IPK awg-manager (hoaxisr + зеркало), выбор версии |
 | **2** | UPX IPK awg-manager из топиков `awgm-*`, выбор версии |
-| **3** | Официальный бинарник sing-box (hoaxisr/amnezia-box), выбор версии |
+| **3** | Официальный бинарник sing-box (hoaxisr/awgm-box), выбор версии |
 | **4** | UPX бинарник sing-box из топиков `sb-*`, выбор версии |
 | **5** | Доступ к AWG Manager через туннель (WG / ZeroTier), встроенный модуль |
 | **88** | Удаление: Sing-Box / AWG-Manager / полное |

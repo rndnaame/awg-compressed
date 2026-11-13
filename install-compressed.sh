@@ -1441,7 +1441,7 @@ install_awg_upx_version_select() {
   return 0
 }
 
-# Пункт [3]: официальный sing-box с выбором версии (hoaxisr/amnezia-box)
+# Пункт [3]: официальный sing-box с выбором версии (hoaxisr/awgm-box)
 install_sb_official_version_select() {
   print_submenu "Sing-Box — официальная версия"
 
@@ -1456,14 +1456,14 @@ install_sb_official_version_select() {
   esac
   echo "✅ Архитектура: $A → $SB_ARCH_SUFFIX"
 
-  echo "→ Список релизов hoaxisr/amnezia-box..."
-  API_JSON=$(fetch_github_api "https://api.github.com/repos/hoaxisr/amnezia-box/releases?per_page=20" || true)
+  echo "→ Список релизов hoaxisr/awgm-box..."
+  API_JSON=$(fetch_github_api "https://api.github.com/repos/hoaxisr/awgm-box/releases?per_page=20" || true)
   VERSIONS=$(echo "$API_JSON" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//g' | grep -v '^latest$' | head -15)
 
   if [ -z "$VERSIONS" ]; then
     echo "   API пуст, пробуем HTML..."
-    HTML=$(fetch_text "https://github.com/hoaxisr/amnezia-box/releases" || true)
-    VERSIONS=$(echo "$HTML" | grep -oE '/hoaxisr/amnezia-box/releases/tag/[^"<> ]+' | sed 's|.*/||' | grep -v '^latest$' | sort -u | sort -Vr | head -15)
+    HTML=$(fetch_text "https://github.com/hoaxisr/awgm-box/releases" || true)
+    VERSIONS=$(echo "$HTML" | grep -oE '/hoaxisr/awgm-box/releases/tag/[^"<> ]+' | sed 's|.*/||' | grep -v '^latest$' | sort -u | sort -Vr | head -15)
   fi
 
   if [ -z "$VERSIONS" ]; then
@@ -1515,7 +1515,7 @@ install_sb_official_version_select() {
 
   ver_disp=${ver_tag#v}
   sb_name="singbox-${ver_disp}-${SB_ARCH_SUFFIX}"
-  url="https://github.com/hoaxisr/amnezia-box/releases/download/${ver_tag}/${sb_name}"
+  url="https://github.com/hoaxisr/awgm-box/releases/download/${ver_tag}/${sb_name}"
 
   echo ""
   echo "📥 Скачивание $ver_disp ($sb_name)..."
