@@ -23,6 +23,8 @@ REPO="rndnaame/awg-compressed"
 TAG="upx"
 TMP="/tmp/awg-compressed-install"
 SINGBOX_DIR="/opt/etc/awg-manager/singbox"
+SB_BIN_PRIMARY="awgm-box"
+SB_BIN_LEGACY="sing-box"
 DEFAULT_IFACES="nwg0 nwg1 t2s0 t2s1 opkgtun10 awgm0 __default__"
 
 # Уборка хвостов в /tmp при любом выходе (меню, Ctrl+C, ошибка)
@@ -663,6 +665,21 @@ build_kind_label() {
   fi
 }
 
+
+resolve_sb_bin() {
+  if [ -x "$SINGBOX_DIR/$SB_BIN_PRIMARY" ]; then
+    echo "$SINGBOX_DIR/$SB_BIN_PRIMARY"
+  elif [ -x "$SINGBOX_DIR/$SB_BIN_LEGACY" ]; then
+    echo "$SINGBOX_DIR/$SB_BIN_LEGACY"
+  elif command -v awgm-box >/dev/null 2>&1; then
+    command -v awgm-box
+  elif command -v sing-box >/dev/null 2>&1; then
+    command -v sing-box
+  else
+    echo ""
+  fi
+}
+
 detect_installed() {
   CUR_AWG=$(opkg list-installed 2>/dev/null | awk '/^awg-manager /{print $3; exit}')
   [ -z "$CUR_AWG" ] && CUR_AWG=""
@@ -682,26 +699,27 @@ detect_installed() {
   CUR_SB_RAW=""
   CUR_SB_VER=""
   CUR_SB_KIND=""
-  # meta.json — без запуска бинарника
-  _meta="$SINGBOX_DIR/sing-box.meta.json"
-  if [ -f "$_meta" ]; then
-    CUR_SB_VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_meta" | head -1)
-    [ -n "$CUR_SB_VER" ] && CUR_SB_RAW="$CUR_SB_VER"
-  fi
-  # Fallback: version только если meta нет (медленнее)
-  if [ -z "$CUR_SB_VER" ]; then
-    if [ -x "$SINGBOX_DIR/sing-box" ]; then
-      CUR_SB_RAW=$("$SINGBOX_DIR/sing-box" version 2>/dev/null | head -1 || true)
-    elif command -v sing-box >/dev/null 2>&1; then
-      CUR_SB_RAW=$(sing-box version 2>/dev/null | head -1 || true)
+  CUR_SB_BIN=$(resolve_sb_bin)
+
+  # meta (awgm-box / sing-box) — без запуска бинарника
+  for _meta in "$SINGBOX_DIR/awgm-box.meta.json" "$SINGBOX_DIR/sing-box.meta.json"; do
+    if [ -f "$_meta" ]; then
+      CUR_SB_VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_meta" | head -1)
+      [ -n "$CUR_SB_VER" ] && { CUR_SB_RAW="$CUR_SB_VER"; break; }
     fi
+  done
+
+  # Fallback: version из бинарника awgm-box или sing-box
+  if [ -z "$CUR_SB_VER" ] && [ -n "$CUR_SB_BIN" ] && [ -x "$CUR_SB_BIN" ]; then
+    CUR_SB_RAW=$("$CUR_SB_BIN" version 2>/dev/null | head -1 || true)
     if [ -n "$CUR_SB_RAW" ]; then
-      CUR_SB_VER=$(echo "$CUR_SB_RAW" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^[:space:]]*' | head -1 || true)
+      CUR_SB_VER=$(echo "$CUR_SB_RAW" | sed -n 's/.*[Vv]ersion[[:space:]]*//p' | awk '{print $1}')
+      [ -z "$CUR_SB_VER" ] && CUR_SB_VER=$(echo "$CUR_SB_RAW" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^[:space:]]*' | head -1 || true)
     fi
   fi
-  # порог 20M для sing-box
-  if [ -x "$SINGBOX_DIR/sing-box" ]; then
-    CUR_SB_KIND=$(build_kind_label "$SINGBOX_DIR/sing-box" 20971520)
+
+  if [ -n "$CUR_SB_BIN" ] && [ -x "$CUR_SB_BIN" ]; then
+    CUR_SB_KIND=$(build_kind_label "$CUR_SB_BIN" 20971520)
   fi
 }
 
@@ -744,11 +762,14 @@ write_sb_meta() {
   [ -n "$_ver" ] || return 0
   mkdir -p "$SINGBOX_DIR" 2>/dev/null || true
   if [ -n "$_kind" ]; then
-    printf '{"version":"%s","kind":"%s"}\n' "$_ver" "$_kind" > "$SINGBOX_DIR/sing-box.meta.json" 2>/dev/null || true
+    _js=$(printf '{"version":"%s","kind":"%s"}\n' "$_ver" "$_kind")
   else
-    printf '{"version":"%s"}\n' "$_ver" > "$SINGBOX_DIR/sing-box.meta.json" 2>/dev/null || true
+    _js=$(printf '{"version":"%s"}\n' "$_ver")
   fi
+  printf '%s' "$_js" > "$SINGBOX_DIR/awgm-box.meta.json" 2>/dev/null || true
+  printf '%s' "$_js" > "$SINGBOX_DIR/sing-box.meta.json" 2>/dev/null || true
 }
+
 
 # ---------------------------------------------------------------------------
 # Релиз compressed
@@ -924,8 +945,9 @@ fetch_release_assets() {
       SIZE_AWG_OFF_KB=$(( _sz / 1024 + 2048 ))
     fi
   fi
-  if [ -x "$SINGBOX_DIR/sing-box" ]; then
-    _sz=$(file_bytes "$SINGBOX_DIR/sing-box")
+  _sbin=$(resolve_sb_bin)
+  if [ -n "$_sbin" ] && [ -x "$_sbin" ]; then
+    _sz=$(file_bytes "$_sbin")
     if [ "${_sz:-0}" -ge 20971520 ] 2>/dev/null; then
       SIZE_SB_OFF_KB=$(( _sz / 1024 + 4096 ))
     fi
@@ -1208,34 +1230,13 @@ install_sb_upx() {
     echo "❌ Ошибка скачивания sing-box"
     exit 1
   fi
-
-  mkdir -p "$SINGBOX_DIR"
-
-  if [ -x "$SINGBOX_DIR/sing-box" ] && { [ "$SB_MODE" = "upgrade" ] || [ "$SB_MODE" = "replace" ]; }; then
-    do_bak=0
-    if [ -n "$BACKUP_SB" ]; then
-      case "$BACKUP_SB" in
-        1|y|Y|yes|YES) do_bak=1 ;;
-      esac
-    else
-      [ "$(yes_no "Сохранить старый sing-box как sing-box.bak? [y/N]: " "n")" = "1" ] && do_bak=1
-    fi
-    if [ "$do_bak" = "1" ]; then
-      cp "$SINGBOX_DIR/sing-box" "$SINGBOX_DIR/sing-box.bak" 2>/dev/null || true
-      echo "   💾 бэкап → $SINGBOX_DIR/sing-box.bak"
-    fi
-  fi
-
-  cp "$SB_NAME" "$SINGBOX_DIR/sing-box"
-  chmod +x "$SINGBOX_DIR/sing-box"
-  [ -n "$NEW_SB" ] && write_sb_meta "$NEW_SB" "upx"
-  echo "✅ sing-box ($SB_MODE) → $SINGBOX_DIR/sing-box"
-  if [ -n "$NEW_SB" ]; then
-    echo "   version: $NEW_SB"
-  else
-    "$SINGBOX_DIR/sing-box" version 2>/dev/null | head -1 || true
-  fi
+  install_sb_binary "$SB_NAME" "${NEW_SB:-unknown}" "upx"
+  rm -f "$SB_NAME"
+  echo "✅ sing-box ($SB_MODE) → $SINGBOX_DIR/$SB_BIN_PRIMARY"
+  [ -n "$NEW_SB" ] && echo "   version: $NEW_SB"
+  "$SINGBOX_DIR/$SB_BIN_PRIMARY" version 2>/dev/null | head -1 || true
 }
+
 
 
 # Теги релизов из JSON API GitHub
@@ -1303,24 +1304,27 @@ prompt_pick_version() {
 install_sb_binary() {
   _src="$1"; _ver="$2"; _kind="$3"
   mkdir -p "$SINGBOX_DIR"
-  if [ -x "$SINGBOX_DIR/sing-box" ]; then
+  _old=$(resolve_sb_bin)
+  if [ -n "$_old" ] && [ -x "$_old" ]; then
     do_bak=0
     if [ -n "$BACKUP_SB" ]; then
       case "$BACKUP_SB" in 1|y|Y|yes|YES) do_bak=1 ;; esac
     else
-      [ "$(yes_no "Сохранить старый sing-box как sing-box.bak? [y/N]: " "n")" = "1" ] && do_bak=1
+      [ "$(yes_no "Сохранить старый бинарник как .bak? [y/N]: " "n")" = "1" ] && do_bak=1
     fi
     if [ "$do_bak" = "1" ]; then
-      cp "$SINGBOX_DIR/sing-box" "$SINGBOX_DIR/sing-box.bak" 2>/dev/null || true
-      echo "   💾 бэкап → $SINGBOX_DIR/sing-box.bak"
+      cp "$_old" "${_old}.bak" 2>/dev/null || true
+      echo "   💾 бэкап → ${_old}.bak"
     fi
   fi
-  cp "$_src" "$SINGBOX_DIR/sing-box"
-  chmod +x "$SINGBOX_DIR/sing-box"
+  cp "$_src" "$SINGBOX_DIR/$SB_BIN_PRIMARY"
+  chmod +x "$SINGBOX_DIR/$SB_BIN_PRIMARY"
+  ln -sfn "$SB_BIN_PRIMARY" "$SINGBOX_DIR/$SB_BIN_LEGACY" 2>/dev/null     || cp "$SINGBOX_DIR/$SB_BIN_PRIMARY" "$SINGBOX_DIR/$SB_BIN_LEGACY"
   write_sb_meta "$_ver" "$_kind"
-  echo "✅ sing-box $_ver → $SINGBOX_DIR/sing-box"
+  echo "✅ sing-box/awgm-box $_ver → $SINGBOX_DIR/$SB_BIN_PRIMARY"
   echo "   version: $_ver"
 }
+
 
 # Пункт [1]: официальный IPK с выбором версии
 install_awg_version_select() {
@@ -1497,24 +1501,25 @@ install_sb_version_select() {
 # Пункт [88]: удаление компонентов
 # ---------------------------------------------------------------------------
 remove_singbox() {
-  print_submenu "Удаление Sing-Box"
-  if [ ! -x "$SINGBOX_DIR/sing-box" ] && [ ! -f "$SINGBOX_DIR/sing-box.meta.json" ]; then
-    echo "sing-box не найден — нечего удалять"
+  print_submenu "Удаление Sing-Box / awgm-box"
+  _bin=$(resolve_sb_bin)
+  if [ -z "$_bin" ]      && [ ! -f "$SINGBOX_DIR/sing-box.meta.json" ]      && [ ! -f "$SINGBOX_DIR/awgm-box.meta.json" ]; then
+    echo "sing-box / awgm-box не найден — нечего удалять"
     return 0
   fi
   echo "Будет удалено:"
-  echo "  $SINGBOX_DIR/sing-box"
-  echo "  $SINGBOX_DIR/sing-box.meta.json"
-  echo "  $SINGBOX_DIR/sing-box.bak (если есть)"
-  if [ "$(yes_no "Удалить Sing-Box? [y/N]: " "n")" != "1" ]; then
+  echo "  $SINGBOX_DIR/awgm-box  (+ .bak, meta)"
+  echo "  $SINGBOX_DIR/sing-box  (+ .bak, meta, symlink)"
+  if [ "$(yes_no "Удалить Sing-Box / awgm-box? [y/N]: " "n")" != "1" ]; then
     echo "→ отменено"
     return 0
   fi
-  rm -f "$SINGBOX_DIR/sing-box" "$SINGBOX_DIR/sing-box.meta.json" "$SINGBOX_DIR/sing-box.bak" 2>/dev/null || true
-  # каталог, если пуст
+  rm -f "$SINGBOX_DIR/awgm-box" "$SINGBOX_DIR/awgm-box.bak" "$SINGBOX_DIR/awgm-box.meta.json" 2>/dev/null || true
+  rm -f "$SINGBOX_DIR/sing-box" "$SINGBOX_DIR/sing-box.bak" "$SINGBOX_DIR/sing-box.meta.json" 2>/dev/null || true
   rmdir "$SINGBOX_DIR" 2>/dev/null || true
-  printf '%b\n' "${green}OK: Sing-Box удалён${reset}"
+  printf '%b\n' "${green}OK: Sing-Box / awgm-box удалён${reset}"
 }
+
 
 remove_awg_manager() {
   print_submenu "Удаление AWG-Manager"
