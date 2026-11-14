@@ -113,16 +113,24 @@ jobs:
             fi
           fi
 
-          # Номер сборки: "41" → 41, "...awgm.40" → 40 (новые имена awgm-box-N-ARCH)
+          # Номер сборки: "41" → 41, "...awgm.40" → 40 (схема awgm-box-N-ARCH)
           sb_build_num() {
-            case "$1" in
-              *awgm.*) echo "$1" | sed -n 's/.*awgm\.\([0-9][0-9]*\).*/\1/p' ;;
-              *[!0-9]*) echo 0 ;;
-              *) echo "$1" ;;
+            _v="$1"
+            case "$_v" in
+              *awgm.*)
+                echo "$_v" | sed -n 's/.*awgm\.\([0-9][0-9]*\).*/\1/p'
+                ;;
+              ''|*[!0-9]*)
+                echo 0
+                ;;
+              *)
+                # чистое число: тег 41
+                echo "$_v"
+                ;;
             esac
           }
 
-          # 1) зеркало: каталоги 1.* и чисто числовые (41/)
+          # 1) зеркало: 1.15…/ и 41/
           SB_VER_MIRROR=$(
             curl_m "$MIRROR/singbox/" \
               | grep -oE 'href="[^"/]+/"' \
@@ -130,14 +138,14 @@ jobs:
               | grep -vE '^\.\.?$' \
               | while read -r ver; do
                   n=$(sb_build_num "$ver")
-                  [ -n "$n" ] || n=0
+                  n=${n:-0}
                   [ "$n" -gt 0 ] 2>/dev/null || continue
                   printf '%s %s\n' "$n" "$ver"
                 done | sort -n | tail -1 | awk '{print $2}'
           )
-          echo "  SB зеркало: ${SB_VER_MIRROR:-none}"
+          echo "  SB зеркало: ${SB_VER_MIRROR:-none} (build=$(sb_build_num "${SB_VER_MIRROR:-}"))"
 
-          # 2) GitHub hoaxisr/awgm-box
+          # 2) GitHub hoaxisr/awgm-box (теги 41 и legacy 1.15…-awgm.N)
           SB_VER_GH=$(
             curl_m -H "Authorization: Bearer ${GITHUB_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
@@ -145,12 +153,12 @@ jobs:
             | jq -r '.[] | select(.draft==false) | .tag_name' \
             | while read -r ver; do
                 n=$(sb_build_num "$ver")
-                [ -n "$n" ] || n=0
+                n=${n:-0}
                 [ "$n" -gt 0 ] 2>/dev/null || continue
                 printf '%s %s\n' "$n" "$ver"
               done | sort -n | tail -1 | awk '{print $2}'
           )
-          echo "  SB GitHub (awgm-box): ${SB_VER_GH:-none}"
+          echo "  SB GitHub (awgm-box): ${SB_VER_GH:-none} (build=$(sb_build_num "${SB_VER_GH:-}"))"
 
           SB_SRC="mirror"
           SB_VER=""
@@ -159,20 +167,24 @@ jobs:
           if [ "$_ng" -gt "$_nm" ] 2>/dev/null; then
             SB_VER="$SB_VER_GH"
             SB_SRC="github"
-            echo "  → берём GitHub $SB_VER (новее зеркала)"
+            echo "  → берём GitHub $SB_VER (build $_ng > mirror $_nm)"
+          elif [ "$_nm" -gt "$_ng" ] 2>/dev/null && [ -n "$SB_VER_MIRROR" ]; then
+            SB_VER="$SB_VER_MIRROR"
+            SB_SRC="mirror"
+            echo "  → берём зеркало $SB_VER (build $_nm >= github $_ng)"
+          elif [ -n "$SB_VER_GH" ]; then
+            # равные build или зеркало пусто — GitHub (актуальные имена awgm-box-*)
+            SB_VER="$SB_VER_GH"
+            SB_SRC="github"
+            echo "  → берём GitHub $SB_VER"
           elif [ -n "$SB_VER_MIRROR" ]; then
             SB_VER="$SB_VER_MIRROR"
             SB_SRC="mirror"
-          elif [ -n "$SB_VER_GH" ]; then
-            SB_VER="$SB_VER_GH"
-            SB_SRC="github"
           fi
-          echo "  sing-box: ${SB_VER:-none} (src=$SB_SRC)"
+          echo "  sing-box: ${SB_VER:-none} (src=$SB_SRC build=$(sb_build_num "${SB_VER:-}"))"
 
           if [ -n "$SB_VER" ]; then
             SB_FILES=""
-            # оба префикса: singbox-* (старые) и awgm-box-* (новые)
-            _sb_name_re='href="((singbox|awgm-box)-[^"]+)"'
             if [ "$SB_SRC" = "mirror" ]; then
               SB_FILES=$(
                 curl_m "$MIRROR/singbox/$SB_VER/" \
@@ -202,7 +214,7 @@ jobs:
               echo "sb|$SB_SRC|$SB_VER|$f|$want" >> /tmp/wanted_src.txt
             done
             if ! grep -qE '^(singbox|awgm-box)-' /tmp/wanted.txt 2>/dev/null; then
-              echo "  ⚠ список SB пуст — проверьте mirror/singbox/$SB_VER/ и hoaxisr/awgm-box"
+              echo "  ⚠ список SB пуст — проверьте mirror/singbox/$SB_VER/ и hoaxisr/awgm-box tag $SB_VER"
             fi
           fi
 
