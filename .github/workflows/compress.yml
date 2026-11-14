@@ -113,40 +113,49 @@ jobs:
             fi
           fi
 
-          # sort -V: 1.14.0-rc.1-awgm.15 > 1.14.0-awgm.16 — неверно для форка.
-          # Берём версию с максимальным N в суффиксе -awgm.N.
-          # 1) зеркало
+          # Номер сборки: "41" → 41, "...awgm.40" → 40 (новые имена awgm-box-N-ARCH)
+          sb_build_num() {
+            case "$1" in
+              *awgm.*) echo "$1" | sed -n 's/.*awgm\.\([0-9][0-9]*\).*/\1/p' ;;
+              *[!0-9]*) echo 0 ;;
+              *) echo "$1" ;;
+            esac
+          }
+
+          # 1) зеркало: каталоги 1.* и чисто числовые (41/)
           SB_VER_MIRROR=$(
             curl_m "$MIRROR/singbox/" \
-              | grep -oE 'href="1\.[^"/]+/"' \
+              | grep -oE 'href="[^"/]+/"' \
               | sed 's/href="//;s|/"||' \
+              | grep -vE '^\.\.?$' \
               | while read -r ver; do
-                  n=$(echo "$ver" | sed -n 's/.*awgm\.\([0-9][0-9]*\).*/\1/p')
+                  n=$(sb_build_num "$ver")
                   [ -n "$n" ] || n=0
+                  [ "$n" -gt 0 ] 2>/dev/null || continue
                   printf '%s %s\n' "$n" "$ver"
                 done | sort -n | tail -1 | awk '{print $2}'
           )
           echo "  SB зеркало: ${SB_VER_MIRROR:-none}"
 
-          # 2) GitHub hoaxisr/awgm-box (новый репозиторий, бывший amnezia-box)
+          # 2) GitHub hoaxisr/awgm-box
           SB_VER_GH=$(
             curl_m -H "Authorization: Bearer ${GITHUB_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/hoaxisr/awgm-box/releases?per_page=20" \
             | jq -r '.[] | select(.draft==false) | .tag_name' \
             | while read -r ver; do
-                n=$(echo "$ver" | sed -n 's/.*awgm\.\([0-9][0-9]*\).*/\1/p')
+                n=$(sb_build_num "$ver")
                 [ -n "$n" ] || n=0
+                [ "$n" -gt 0 ] 2>/dev/null || continue
                 printf '%s %s\n' "$n" "$ver"
               done | sort -n | tail -1 | awk '{print $2}'
           )
           echo "  SB GitHub (awgm-box): ${SB_VER_GH:-none}"
 
-          # max по awgm.N
           SB_SRC="mirror"
           SB_VER=""
-          _nm=$(echo "$SB_VER_MIRROR" | sed -n 's/.*awgm\.\([0-9][0-9]*\).*/\1/p'); _nm=${_nm:-0}
-          _ng=$(echo "$SB_VER_GH" | sed -n 's/.*awgm\.\([0-9][0-9]*\).*/\1/p'); _ng=${_ng:-0}
+          _nm=$(sb_build_num "$SB_VER_MIRROR"); _nm=${_nm:-0}
+          _ng=$(sb_build_num "$SB_VER_GH"); _ng=${_ng:-0}
           if [ "$_ng" -gt "$_nm" ] 2>/dev/null; then
             SB_VER="$SB_VER_GH"
             SB_SRC="github"
@@ -162,25 +171,26 @@ jobs:
 
           if [ -n "$SB_VER" ]; then
             SB_FILES=""
+            # оба префикса: singbox-* (старые) и awgm-box-* (новые)
+            _sb_name_re='href="((singbox|awgm-box)-[^"]+)"'
             if [ "$SB_SRC" = "mirror" ]; then
               SB_FILES=$(
                 curl_m "$MIRROR/singbox/$SB_VER/" \
-                  | grep -oE 'href="singbox-[^"]+"' \
+                  | grep -oE 'href="(singbox|awgm-box)-[^"]+"' \
                   | sed 's/^href="//;s/"$//' \
                   | grep -vE -- '\.(sha256|sig|asc)$' \
                   | grep -E -- '-(aarch64-3\.10|mipsel-3\.4|mips-3\.4)$' \
                   | sort -u
               )
             fi
-            # GitHub assets или fallback если зеркало пусто
             if [ -z "$SB_FILES" ]; then
               SB_SRC="github"
               SB_FILES=$(
                 curl_m -H "Authorization: Bearer ${GITHUB_TOKEN}" \
                   -H "Accept: application/vnd.github+json" \
                   "https://api.github.com/repos/hoaxisr/awgm-box/releases/tags/${SB_VER}" \
-                | jq -r '.assets[].name' \
-                | grep -E -- '^singbox-.*-(aarch64-3\.10|mipsel-3\.4|mips-3\.4)$' \
+                | jq -r '.assets[].name // empty' \
+                | grep -E -- '^(singbox|awgm-box)-.*-(aarch64-3\.10|mipsel-3\.4|mips-3\.4)$' \
                 | grep -vE -- '\.(sha256|sig|asc)$' \
                 | sort -u
               )
@@ -191,7 +201,7 @@ jobs:
               echo "$want" >> /tmp/wanted.txt
               echo "sb|$SB_SRC|$SB_VER|$f|$want" >> /tmp/wanted_src.txt
             done
-            if ! grep -q '^singbox-' /tmp/wanted.txt 2>/dev/null; then
+            if ! grep -qE '^(singbox|awgm-box)-' /tmp/wanted.txt 2>/dev/null; then
               echo "  ⚠ список SB пуст — проверьте mirror/singbox/$SB_VER/ и hoaxisr/awgm-box"
             fi
           fi
@@ -252,19 +262,19 @@ jobs:
               NEED=1
               case "$want" in
                 awg-manager_*) NEED_AWG=1 ;;
-                singbox-*) NEED_SB=1 ;;
+                singbox-*|awgm-box-*) NEED_SB=1 ;;
               esac
             fi
           done < /tmp/wanted.txt
 
           # Если в rolling-релизе нет ни одного sing-box, а на зеркале есть —
           # принудительно собрать (после сбоя не зацикливаться на refresh-only)
-          if ! grep -q '^singbox-' /tmp/existing.txt 2>/dev/null; then
-            if grep -q '^singbox-' /tmp/wanted.txt 2>/dev/null; then
+          if ! grep -qE '^(singbox|awgm-box)-' /tmp/existing.txt 2>/dev/null; then
+            if grep -qE '^(singbox|awgm-box)-' /tmp/wanted.txt 2>/dev/null; then
               echo ">>> В ${ROLLING_TAG} нет sing-box — принудительная сборка"
               while read -r want; do
                 case "$want" in
-                  singbox-*)
+                  singbox-*|awgm-box-*)
                     if ! grep -qxF "$want" /tmp/todo.txt 2>/dev/null; then
                       echo "  BUILD(force): $want"
                       echo "$want" >> /tmp/todo.txt
@@ -429,7 +439,7 @@ jobs:
                   ;;
               esac
               case "$f" in
-                singbox-*-aarch64-3.10|singbox-*-mipsel-3.4|singbox-*-mips-3.4) ;;
+                singbox-*-aarch64-3.10|singbox-*-mipsel-3.4|singbox-*-mips-3.4|awgm-box-*-aarch64-3.10|awgm-box-*-mipsel-3.4|awgm-box-*-mips-3.4) ;;
                 *)
                   echo "SKIP unexpected SB name: $f"
                   continue
@@ -562,6 +572,7 @@ jobs:
           echo "== Накладываем свежую сборку =="
           cp -f out/*.ipk out/latest/ 2>/dev/null || true
           cp -f out/singbox-*_compressed out/latest/ 2>/dev/null || true
+          cp -f out/awgm-box-*_compressed out/latest/ 2>/dev/null || true
           cp -f out/awg/* out/latest/ 2>/dev/null || true
           cp -f out/sb/* out/latest/ 2>/dev/null || true
 
@@ -581,14 +592,14 @@ jobs:
                 awg-manager_*_mips-3.4-kn_compressed.ipk)
                   find out/latest -maxdepth 1 -name 'awg-manager_*_mips-3.4-kn_compressed.ipk' ! -name "$want" -delete 2>/dev/null || true
                   ;;
-                singbox-*-aarch64-3.10_compressed)
-                  find out/latest -maxdepth 1 -name 'singbox-*-aarch64-3.10_compressed' ! -name "$want" -delete 2>/dev/null || true
+                singbox-*-aarch64-3.10_compressed|awgm-box-*-aarch64-3.10_compressed)
+                  find out/latest -maxdepth 1 \( -name 'singbox-*-aarch64-3.10_compressed' -o -name 'awgm-box-*-aarch64-3.10_compressed' \) ! -name "$want" -delete 2>/dev/null || true
                   ;;
-                singbox-*-mipsel-3.4_compressed)
-                  find out/latest -maxdepth 1 -name 'singbox-*-mipsel-3.4_compressed' ! -name "$want" -delete 2>/dev/null || true
+                singbox-*-mipsel-3.4_compressed|awgm-box-*-mipsel-3.4_compressed)
+                  find out/latest -maxdepth 1 \( -name 'singbox-*-mipsel-3.4_compressed' -o -name 'awgm-box-*-mipsel-3.4_compressed' \) ! -name "$want" -delete 2>/dev/null || true
                   ;;
-                singbox-*-mips-3.4_compressed)
-                  find out/latest -maxdepth 1 -name 'singbox-*-mips-3.4_compressed' ! -name "$want" -delete 2>/dev/null || true
+                singbox-*-mips-3.4_compressed|awgm-box-*-mips-3.4_compressed)
+                  find out/latest -maxdepth 1 \( -name 'singbox-*-mips-3.4_compressed' -o -name 'awgm-box-*-mips-3.4_compressed' \) ! -name "$want" -delete 2>/dev/null || true
                   ;;
               esac
             done < wanted.txt

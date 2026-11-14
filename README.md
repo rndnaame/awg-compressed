@@ -165,8 +165,9 @@ wget -O /tmp/awg.ipk \
 opkg install /tmp/awg.ipk
 
 mkdir -p /opt/etc/awg-manager/singbox
+# новые: awgm-box-41-ARCH_compressed; старые: singbox-VERSION-ARCH_compressed
 wget -O /opt/etc/awg-manager/singbox/sing-box \
-  "https://github.com/rndnaame/awg-compressed/releases/download/upx/singbox-VERSION-aarch64-3.10_compressed"
+  "https://github.com/rndnaame/awg-compressed/releases/download/upx/awgm-box-41-aarch64-3.10_compressed"
 chmod +x /opt/etc/awg-manager/singbox/sing-box
 ```
 

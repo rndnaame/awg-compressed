@@ -574,21 +574,21 @@ detect_arch() {
   case "$ARCH" in
     aarch64)
       IPK_PAT="awg-manager_.*_aarch64-3.10-kn_compressed\\.ipk"
-      SB_PAT="singbox-.*-aarch64-3.10_compressed"
+      SB_PAT="(singbox|awgm-box)-.*-aarch64-3.10_compressed"
       ARCH_SUFFIX="aarch64-3.10-kn"
       ARCH_REPO="aarch64-k3.10"
       SB_ARCH_SUFFIX="aarch64-3.10"
       ;;
     mipsel)
       IPK_PAT="awg-manager_.*_mipsel-3.4-kn_compressed\\.ipk"
-      SB_PAT="singbox-.*-mipsel-3.4_compressed"
+      SB_PAT="(singbox|awgm-box)-.*-mipsel-3.4_compressed"
       ARCH_SUFFIX="mipsel-3.4-kn"
       ARCH_REPO="mipsel-k3.4"
       SB_ARCH_SUFFIX="mipsel-3.4"
       ;;
     mips)
       IPK_PAT="awg-manager_.*_mips-3.4-kn_compressed\\.ipk"
-      SB_PAT="singbox-.*-mips-3.4_compressed"
+      SB_PAT="(singbox|awgm-box)-.*-mips-3.4_compressed"
       ARCH_SUFFIX="mips-3.4-kn"
       ARCH_REPO="mips-k3.4"
       SB_ARCH_SUFFIX="mips-3.4"
@@ -897,7 +897,7 @@ fetch_release_assets() {
     NEW_AWG=$(echo "$IPK_NAME" | sed -n 's/^awg-manager_\([^_]*\)_.*/\1/p')
   fi
   if [ -n "$SB_NAME" ]; then
-    NEW_SB=$(echo "$SB_NAME" | sed -n 's/^singbox-\(.*\)-\(aarch64\|mipsel\|mips\)-.*/\1/p')
+    NEW_SB=$(echo "$SB_NAME" | sed -n -e 's/^singbox-\(.*\)-\(aarch64\|mipsel\|mips\)-.*/\1/p' -e 's/^awgm-box-\(.*\)-\(aarch64\|mipsel\|mips\)-.*/\1/p' | head -1)
   fi
 
   # Оценки места (КБ): нужно свободно ≈ размер пакета + запас на скачивание
@@ -1398,6 +1398,26 @@ install_awg_upx_version_select() {
   return 0
 }
 
+
+# Номер сборки: "41" → 41, "1.15.0-alpha.13-awgm.40" → 40
+sb_build_num() {
+  case "$1" in
+    *awgm.*) printf '%s' "$1" | sed -n 's/.*awgm\.\([0-9][0-9]*\).*/\1/p' ;;
+    *[!0-9]*) printf '0' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# Имя оф. бинарника: тег 41 → awgm-box-41-ARCH; иначе singbox-TAG-ARCH
+sb_official_bin_name() {
+  _tag="$1"
+  _arch="$2"
+  case "$_tag" in
+    *[!0-9]*) printf 'singbox-%s-%s' "$_tag" "$_arch" ;;
+    *)        printf 'awgm-box-%s-%s' "$_tag" "$_arch" ;;
+  esac
+}
+
 # Пункт [3]: официальный sing-box (hoaxisr/awgm-box)
 install_sb_official_version_select() {
   print_submenu "Sing-Box — официальная версия"
@@ -1412,9 +1432,16 @@ install_sb_official_version_select() {
     VERSIONS=$(echo "$HTML" | grep -oE '/hoaxisr/awgm-box/releases/tag/[^"<> ]+' | sed 's|.*/||' | grep -v '^latest$' | sort -u | sort -Vr | head -15)
   fi
   [ -n "$VERSIONS" ] || { echo "❌ Не удалось получить список версий sing-box"; return 1; }
-  prompt_pick_version "$VERSIONS" "$API_JSON" "v" "" || return $?
-  ver_tag="$PICKED_TAG"; ver_disp=${ver_tag#v}
-  sb_name="singbox-${ver_disp}-${SB_ARCH_SUFFIX}"
+  # новые сверху по номеру сборки (41 > awgm.40)
+  VERSIONS=$(echo "$VERSIONS" | while read -r _v; do
+    [ -n "$_v" ] || continue
+    printf '%s %s\n' "$(sb_build_num "$_v")" "$_v"
+  done | sort -nr | awk '{print $2}')
+  [ -n "$VERSIONS" ] || { echo "❌ Не удалось получить список версий sing-box"; return 1; }
+  prompt_pick_version "$VERSIONS" "$API_JSON" "" "" || return $?
+  ver_tag="$PICKED_TAG"
+  ver_disp=${ver_tag#v}
+  sb_name=$(sb_official_bin_name "$ver_tag" "$SB_ARCH_SUFFIX")
   url="https://github.com/hoaxisr/awgm-box/releases/download/${ver_tag}/${sb_name}"
   echo ""; echo "📥 Скачивание $ver_disp ($sb_name)..."
   mkdir -p "$TMP"; cd "$TMP" || return 1; rm -f "$sb_name"
@@ -1443,12 +1470,22 @@ install_sb_version_select() {
   [ -n "$VERSIONS" ] || { echo "❌ Не удалось получить список версий sing-box"; return 1; }
   prompt_pick_version "$VERSIONS" "$API_JSON" "sb-" "sb-" || return $?
   ver_tag="$PICKED_TAG"; ver_disp=${ver_tag#sb-}
-  sb_name="singbox-${ver_disp}-${SB_ARCH_SUFFIX}_compressed"
-  url="https://github.com/${REPO}/releases/download/${ver_tag}/${sb_name}"
-  echo ""; echo "📥 Скачивание $ver_disp ($sb_name)..."
-  mkdir -p "$TMP"; cd "$TMP" || return 1; rm -f "$sb_name"
-  if ! download_file "$url" "$sb_name" 100000; then
-    echo "❌ Ошибка скачивания $ver_disp"; echo "   URL: $url"; return 1
+  # UPX: новые ассеты awgm-box-N-ARCH_compressed, старые singbox-..._compressed
+  sb_name=""
+  for _cand in     "awgm-box-${ver_disp}-${SB_ARCH_SUFFIX}_compressed"     "singbox-${ver_disp}-${SB_ARCH_SUFFIX}_compressed"
+  do
+    _u="https://github.com/${REPO}/releases/download/${ver_tag}/${_cand}"
+    echo ""; echo "📥 Скачивание $ver_disp ($_cand)..."
+    mkdir -p "$TMP"; cd "$TMP" || return 1
+    rm -f "$_cand"
+    if download_file "$_u" "$_cand" 100000; then
+      sb_name="$_cand"
+      break
+    fi
+  done
+  if [ -z "$sb_name" ]; then
+    echo "❌ Ошибка скачивания $ver_disp (awgm-box/singbox UPX)"
+    return 1
   fi
   install_sb_binary "$sb_name" "$ver_disp" "upx"
   rm -f "$sb_name"
